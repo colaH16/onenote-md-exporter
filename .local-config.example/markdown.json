@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "sourceArchiveRoot": "./output/archive",
+  "outputRoot": "./output/markdown",
+  "notebooks": [
+    {
+      "id": "allowed-onenote-notebook-id",
+      "name": "Example conversion notebook"
+    }
+  ]
+}

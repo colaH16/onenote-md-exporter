@@ -1,0 +1,13 @@
+{
+  "outputRoot": "./output",
+  "notebooks": [
+    {
+      "id": "onenote-notebook-id",
+      "name": "Example backup notebook"
+    },
+    {
+      "id": "backup-only-notebook-id",
+      "name": "Example backup-only notebook"
+    }
+  ]
+}

@@ -1,5 +1,9 @@
-# Contains private notebook names and IDs.
+# Contains private notebook names, IDs, and selection policy.
+.local-config/
+
+# Legacy local configuration paths.
 config.local.json
+conversion.local.json
 
 # Exported OneNote content must never be committed.
 output/

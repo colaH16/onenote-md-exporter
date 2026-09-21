@@ -2,6 +2,18 @@
 
 이 문서는 HTML 아카이브를 SilverBullet용 Markdown으로 변환할 때 지켜야 할 사용자 규칙을 기록합니다.
 
+## 변환 범위와 개인정보 경계
+
+실제 노트북 이름과 ID, 개인정보 관련 선택 이유는 공개 문서에 기록하지 않습니다. Git에서 제외되는 로컬 설정만 기준으로 삼습니다.
+
+- 백업 범위는 `.local-config/export.json`의 `notebooks`를 확인합니다.
+- Markdown·SilverBullet·RAG 변환 허용 범위는 `.local-config/markdown.json`의 `notebooks`만 확인합니다.
+- 백업 전용 및 제외 사유는 `.local-config/POLICY.md`를 확인합니다.
+- `markdown.json`에 ID가 명시되지 않은 노트북은 기본 거부(default deny)하며 Markdown으로 변환하지 않습니다.
+- 백업용 `export.json`의 선택 목록을 변환 허용 목록으로 재사용하지 않습니다.
+- `_old/` 및 `rag_priority: fallback` 규칙은 `markdown.json`에 허용된 노트북 내부의 과거 문서에만 적용합니다. 백업 전용 노트북을 `_old/`로 우회 수록하지 않습니다.
+- RAG 색인 작업은 입력에 포함된 모든 노트북 ID가 `markdown.json`에 있는지 먼저 검사하고, 하나라도 다르면 전체 작업을 중단해야 합니다.
+
 ## 페이지와 섹션 계층
 
 - OneNote의 섹션 그룹과 섹션 계층은 실제 디렉터리 구조로 변환합니다.

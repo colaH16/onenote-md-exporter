@@ -3,10 +3,11 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('help', 'list', 'init', 'export', 'verify', 'repair', 'logout')]
+    [ValidateSet('help', 'list', 'init', 'init-conversion', 'export', 'verify', 'repair', 'logout')]
     [string] $Command = 'help',
 
-    [string] $Config = './config.local.json',
+    [string] $Config = './.local-config/export.json',
+    [string] $ConversionConfig = './.local-config/markdown.json',
     [string] $Output,
     [switch] $Force,
 
@@ -36,13 +37,16 @@ OneNote Archive Exporter
 사용법:
   pwsh ./onenote-export.ps1 list
   pwsh ./onenote-export.ps1 init
+  pwsh ./onenote-export.ps1 init-conversion
   pwsh ./onenote-export.ps1 export [-Force]
   pwsh ./onenote-export.ps1 verify
   pwsh ./onenote-export.ps1 repair
   pwsh ./onenote-export.ps1 logout
 
 옵션:
-  -Config <path>   로컬 설정 파일. 기본값: ./config.local.json
+  -Config <path>   백업 설정 파일. 기본값: ./.local-config/export.json
+  -ConversionConfig <path>
+                   Markdown 변환 설정. 기본값: ./.local-config/markdown.json
   -Output <path>   출력 디렉터리. 설정의 outputRoot보다 우선합니다.
   -Force           변경 여부와 관계없이 모든 페이지를 다시 받습니다.
   -RequestIntervalSeconds <seconds>
@@ -50,7 +54,25 @@ OneNote Archive Exporter
 
 verify는 Graph에 연결하지 않고 로컬 output/archive의 완전성만 검사합니다.
 repair는 verify에서 발견한 불완전한 페이지만 Graph에서 다시 받습니다.
+init-conversion은 백업 대상 중 Markdown·SilverBullet·RAG에 사용할 노트만 별도로 선택합니다.
 '@ | Write-Host
+}
+
+function Resolve-ExportConfigurationPath {
+    param([Parameter(Mandatory)][string] $RequestedPath)
+
+    if (Test-Path -LiteralPath $RequestedPath -PathType Leaf) {
+        return $RequestedPath
+    }
+
+    $defaultPath = Resolve-ProjectPath -Path './.local-config/export.json'
+    if ($RequestedPath -eq $defaultPath) {
+        $legacyPath = Resolve-ProjectPath -Path './config.local.json'
+        if (Test-Path -LiteralPath $legacyPath -PathType Leaf) {
+            return $legacyPath
+        }
+    }
+    return $RequestedPath
 }
 
 function Resolve-ArchiveOutputRoot {
@@ -138,6 +160,108 @@ function Initialize-Configuration {
     }
     Write-Host "`n설정 저장: $ConfigPath"
     Write-Host "네이티브 백업 체크리스트: $checklistPath"
+}
+
+function Initialize-ConversionConfiguration {
+    param(
+        [Parameter(Mandatory)][string] $ExportConfigPath,
+        [Parameter(Mandatory)][string] $CanonicalExportConfigPath,
+        [Parameter(Mandatory)][string] $ConversionConfigPath
+    )
+
+    if (-not (Test-Path -LiteralPath $ExportConfigPath -PathType Leaf)) {
+        throw "백업 설정 파일이 없습니다: $ExportConfigPath`n먼저 'pwsh ./onenote-export.ps1 init'을 실행하세요."
+    }
+
+    $exportConfiguration = Get-Content -LiteralPath $ExportConfigPath -Raw -Encoding utf8 | ConvertFrom-Json
+    $exportNotebooks = @($exportConfiguration.notebooks)
+    if ($exportNotebooks.Count -eq 0) {
+        throw '백업 설정에 선택된 노트북이 없습니다.'
+    }
+
+    if ($ExportConfigPath -ne $CanonicalExportConfigPath) {
+        Write-JsonFile -Path $CanonicalExportConfigPath -Value $exportConfiguration
+        Write-Host "기존 백업 설정을 로컬 설정 폴더로 복사했습니다: $CanonicalExportConfigPath"
+    }
+
+    $displayNotebooks = foreach ($notebook in $exportNotebooks) {
+        [pscustomobject]@{
+            id = $notebook.id
+            displayName = $notebook.name
+        }
+    }
+    Write-Host "`n백업 대상 노트북 $($displayNotebooks.Count)개:`n"
+    Show-Notebooks -Notebooks @($displayNotebooks)
+    Write-Host ''
+    $selectionText = Read-Host 'Markdown·SilverBullet·RAG에 사용할 번호를 입력하세요 (예: 1,3,5-8)'
+    $selection = @(ConvertFrom-NumberSelection -Selection $selectionText -Maximum $displayNotebooks.Count)
+
+    $selected = @(
+        foreach ($number in $selection) {
+            $notebook = $exportNotebooks[$number - 1]
+            [ordered]@{
+                id = $notebook.id
+                name = $notebook.name
+            }
+        }
+    )
+    $configuration = [ordered]@{
+        schemaVersion = 1
+        sourceArchiveRoot = './output/archive'
+        outputRoot = './output/markdown'
+        notebooks = @($selected)
+    }
+    Write-JsonFile -Path $ConversionConfigPath -Value $configuration
+
+    $selectedIds = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    foreach ($notebook in $selected) {
+        [void] $selectedIds.Add([string] $notebook.id)
+    }
+    $backupOnly = @($exportNotebooks | Where-Object { -not $selectedIds.Contains([string] $_.id) })
+
+    $policyPath = Join-Path (Split-Path -Parent $ConversionConfigPath) 'POLICY.md'
+    $policyLines = [System.Collections.Generic.List[string]]::new()
+    $policyLines.Add('# 로컬 OneNote 변환 정책')
+    $policyLines.Add('')
+    $policyLines.Add('> 이 파일에는 실제 노트북 이름이 포함됩니다. `.local-config/`는 Git에 커밋하지 않습니다.')
+    $policyLines.Add('')
+    $policyLines.Add('## 백업 대상 (`export.json`)')
+    $policyLines.Add('')
+    foreach ($notebook in $exportNotebooks) {
+        $policyLines.Add("- $($notebook.name)")
+    }
+    $policyLines.Add('')
+    $policyLines.Add('## Markdown · SilverBullet · RAG 대상 (`markdown.json`)')
+    $policyLines.Add('')
+    foreach ($notebook in $selected) {
+        $policyLines.Add("- $($notebook.name)")
+    }
+    $policyLines.Add('')
+    $policyLines.Add('## 백업 전용 — 변환 및 RAG 제외')
+    $policyLines.Add('')
+    if ($backupOnly.Count -eq 0) {
+        $policyLines.Add('- 없음')
+    }
+    else {
+        foreach ($notebook in $backupOnly) {
+            $policyLines.Add("- $($notebook.name)")
+        }
+    }
+    $policyLines.Add('')
+    $policyLines.Add('## 강제 규칙')
+    $policyLines.Add('')
+    $policyLines.Add('- `markdown.json`에 ID가 없는 노트북은 Markdown으로 변환하지 않는다.')
+    $policyLines.Add('- SilverBullet에는 `markdown.json`의 노트북만 배포한다.')
+    $policyLines.Add('- RAG 색인 전 모든 원본 노트북 ID가 허용 목록에 있는지 검사한다.')
+    $policyContent = ($policyLines -join [Environment]::NewLine) + [Environment]::NewLine
+    $policyParent = Split-Path -Parent $policyPath
+    New-Item -ItemType Directory -Path $policyParent -Force | Out-Null
+    [System.IO.File]::WriteAllText($policyPath, $policyContent, [System.Text.UTF8Encoding]::new($false))
+
+    Write-Host "`n변환 대상 $($selected.Count)개를 선택했습니다."
+    Write-Host "- 변환 설정: $ConversionConfigPath"
+    Write-Host "- 로컬 정책: $policyPath"
+    Write-Host "- 백업 전용: $($backupOnly.Count)개"
 }
 
 function Invoke-ArchiveExport {
@@ -425,7 +549,9 @@ function Invoke-ArchiveRepair {
     }
 }
 
-$configPath = Resolve-ProjectPath -Path $Config
+$requestedConfigPath = Resolve-ProjectPath -Path $Config
+$configPath = Resolve-ExportConfigurationPath -RequestedPath $requestedConfigPath
+$conversionConfigPath = Resolve-ProjectPath -Path $ConversionConfig
 Set-OneNoteRequestInterval -Seconds $RequestIntervalSeconds
 switch ($Command) {
     'help' { Show-Help }
@@ -433,7 +559,13 @@ switch ($Command) {
         Connect-OneNoteGraph
         Show-Notebooks -Notebooks @(Get-OneNoteNotebooks)
     }
-    'init' { Initialize-Configuration -ConfigPath $configPath }
+    'init' { Initialize-Configuration -ConfigPath $requestedConfigPath }
+    'init-conversion' {
+        Initialize-ConversionConfiguration `
+            -ExportConfigPath $configPath `
+            -CanonicalExportConfigPath $requestedConfigPath `
+            -ConversionConfigPath $conversionConfigPath
+    }
     'logout' { Disconnect-OneNoteGraph }
     'export' {
         Invoke-ArchiveExport `

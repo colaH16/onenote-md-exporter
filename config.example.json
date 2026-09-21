@@ -1,9 +1,0 @@
-{
-  "outputRoot": "./output",
-  "notebooks": [
-    {
-      "id": "onenote-notebook-id",
-      "name": "Example notebook"
-    }
-  ]
-}

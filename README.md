@@ -4,7 +4,7 @@
 
 1단계는 Markdown 변환이 아니라 **OneNote 페이지의 Graph HTML, 자유 배치 좌표, 이미지, 첨부파일과 계층을 빠짐없이 로컬에 보존하는 것**입니다. Markdown은 이 원본을 검증한 다음 별도 단계에서 생성합니다.
 
-> 이 저장소에는 exporter 코드만 보관합니다. 실제 노트, 첨부파일, 인증 정보와 `config.local.json`은 `.gitignore`에 포함되어 있습니다.
+> 이 저장소에는 exporter 코드만 보관합니다. 실제 노트, 첨부파일, 인증 정보와 노트북 선택 정보가 담긴 `.local-config/`는 `.gitignore`에 포함되어 있습니다.
 
 ## 보존 계층
 
@@ -60,11 +60,32 @@ pwsh ./onenote-export.ps1 logout
 pwsh ./onenote-export.ps1 init
 ```
 
-쉼표와 범위를 함께 사용할 수 있습니다. 예: `1,3,5-8`. 선택 결과는 Git에서 제외되는 `config.local.json`에 저장됩니다.
+쉼표와 범위를 함께 사용할 수 있습니다. 예: `1,3,5-8`. 선택 결과는 Git에서 제외되는 `.local-config/export.json`에 저장됩니다.
 
 선택한 노트북 이름으로 `output/native-backup-checklist.md`도 생성됩니다. 이 체크리스트를 보면서 [네이티브 ZIP 백업 절차](docs/native-backup.md)를 먼저 진행할 수 있습니다.
 
-### 3. 원본 보존
+기존 `config.local.json`이 있으면 계속 읽을 수 있습니다. 이후 `init-conversion`을 실행하면 `.local-config/export.json`으로 안전하게 복사되며 기존 파일은 삭제하지 않습니다.
+
+### 3. Markdown 변환 대상 별도 선택
+
+백업 대상 중 나중에 Markdown·SilverBullet·RAG에 사용할 노트북만 다시 선택합니다.
+
+```fish
+pwsh ./onenote-export.ps1 init-conversion
+```
+
+다음 파일은 모두 Git에서 제외됩니다.
+
+```text
+.local-config/
+├── export.json       # 원본 백업 대상
+├── markdown.json     # Markdown·SilverBullet·RAG 허용 대상
+└── POLICY.md         # 포함·제외 목록과 로컬 개인정보 정책
+```
+
+공개 문서에는 실제 노트북 이름을 적지 않습니다. 후속 변환기는 반드시 `markdown.json`의 OneNote 노트북 ID만 허용하고, 나머지는 기본적으로 거부해야 합니다.
+
+### 4. 원본 보존
 
 ```fish
 pwsh ./onenote-export.ps1 export
@@ -156,4 +177,4 @@ Markdown 변환 단계에서는 가까운 블록과 정렬 관계를 이용해 �
 - Graph 권한은 `Notes.Read`만 사용합니다.
 - 로그인 컨텍스트는 Microsoft Graph PowerShell의 `CurrentUser` 캐시에 보관되며 `logout`으로 삭제할 수 있습니다.
 - 페이지 본문이나 토큰을 별도 로그에 남기지 않습니다.
-- `output/`과 `config.local.json`은 커밋하지 않습니다.
+- `output/`, `.local-config/`, 기존 `config.local.json`은 커밋하지 않습니다.
