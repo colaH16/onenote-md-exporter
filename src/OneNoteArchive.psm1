@@ -204,7 +204,7 @@ function Invoke-OneNoteGraphRequest {
                 $throttleAttempt++
                 $exponent = [Math]::Min($throttleAttempt - 1, 4)
                 $delaySeconds = [int] [Math]::Min(900, 60 * [Math]::Pow(2, $exponent))
-                Write-Warning "OneNote API 사용량 제한(429/20166)입니다. $delaySeconds초 쉬고 같은 요청을 재시도합니다. 중단할 필요가 없습니다."
+                Write-Warning "OneNote API 사용량 제한(429/20166)입니다. ${delaySeconds}초 쉬고 같은 요청을 재시도합니다. 중단할 필요가 없습니다."
                 Start-Sleep -Seconds $delaySeconds
                 continue
             }
@@ -216,7 +216,7 @@ function Invoke-OneNoteGraphRequest {
             }
 
             $delaySeconds = [Math]::Min(60, [Math]::Pow(2, $attempt))
-            Write-Warning "Graph 요청 실패(HTTP $statusCode). $delaySeconds초 후 재시도합니다. ($attempt/$MaximumAttempts)"
+            Write-Warning "Graph 요청 실패(HTTP $statusCode). ${delaySeconds}초 후 재시도합니다. ($attempt/$MaximumAttempts)"
             Start-Sleep -Seconds $delaySeconds
         }
         finally {

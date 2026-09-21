@@ -70,6 +70,26 @@ catch {
 }
 Assert-Equal 429 $throttleStatus 'SDK가 감싼 OneNote 20166 오류를 429로 감지해야 합니다.'
 
+$throttleRetryCalls = & $archiveModule {
+    $script:ThrottleRetryCalls = 0
+    function Invoke-MgGraphRequest {
+        param([string] $Method, [string] $Uri)
+
+        $script:ThrottleRetryCalls++
+        if ($script:ThrottleRetryCalls -eq 1) {
+            throw [System.Exception]::new('HTTP request failed: TooManyRequests, OneNote error 20166')
+        }
+        return [pscustomobject]@{ value = @() }
+    }
+    function Start-Sleep {
+        param([int] $Seconds)
+    }
+
+    [void] (Invoke-OneNoteGraphRequest -Uri 'https://graph.microsoft.com/v1.0/me/onenote/notebooks')
+    return $script:ThrottleRetryCalls
+}
+Assert-Equal 2 $throttleRetryCalls '429 경고를 출력한 뒤 같은 요청을 재시도해야 합니다.'
+
 $temporaryRoot = Join-Path ([System.IO.Path]::GetTempPath()) "onenote-md-exporter-$([guid]::NewGuid().ToString('N'))"
 New-Item -ItemType Directory -Path $temporaryRoot -Force | Out-Null
 try {
