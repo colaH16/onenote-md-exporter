@@ -88,7 +88,7 @@ function Connect-OneNoteGraph {
         -Scopes 'Notes.Read' `
         -UseDeviceCode `
         -ContextScope Process `
-        -NoWelcome | Out-Null
+        -NoWelcome
 }
 
 function Get-GraphStatusCode {
