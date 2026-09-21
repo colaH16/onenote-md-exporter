@@ -12,6 +12,8 @@
 - 이관 원본: 이 exporter가 만드는 HTML, 리소스, 메타데이터와 manifest.
 - 활용본: 검증된 이관 원본으로 나중에 만드는 SilverBullet용 Markdown.
 
+후속 Markdown 변환 시 적용할 사용자 규칙은 [Markdown 변환 메모](docs/markdown-conversion-notes.md)에 기록합니다.
+
 Graph HTML은 텍스트 상자와 이미지의 `top`, `left`, `width`, `height` 같은 배치 정보를 포함하지만 OneNote의 네이티브 파일 형식 자체는 아닙니다.
 
 ## 요구 사항
