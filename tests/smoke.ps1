@@ -70,6 +70,18 @@ catch {
 }
 Assert-Equal 429 $throttleStatus 'SDK가 감싼 OneNote 20166 오류를 429로 감지해야 합니다.'
 
+$gatewayTimeoutStatus = 0
+try {
+    throw [System.Exception]::new('HTTP request failed with status code: GatewayTimeout.')
+}
+catch {
+    $gatewayTimeoutStatus = & $archiveModule {
+        param($ErrorRecord)
+        Get-GraphStatusCode -ErrorRecord $ErrorRecord
+    } $_
+}
+Assert-Equal 504 $gatewayTimeoutStatus 'SDK가 이름으로만 남긴 GatewayTimeout을 504로 감지해야 합니다.'
+
 $throttleRetryCalls = & $archiveModule {
     $script:ThrottleRetryCalls = 0
     function Invoke-MgGraphRequest {
@@ -138,6 +150,49 @@ try {
     Assert-Equal 64 $pageMetadata.files.rawHtml.sha256.Length '원본 HTML SHA-256이 기록되어야 합니다.'
     Assert-Equal 2 @($pageMetadata.resources).Count '리소스 메타데이터 수가 잘못됐습니다.'
     Assert-Equal 64 $pageMetadata.resources[0].sha256.Length '리소스 SHA-256이 기록되어야 합니다.'
+
+    $verifyOutput = Join-Path $temporaryRoot 'verify-output'
+    $verifySection = Join-Path $verifyOutput 'archive/notebook/section'
+    New-Item -ItemType Directory -Path $verifySection -Force | Out-Null
+    Write-JsonFile -Path (Join-Path $verifySection 'section.json') -Value ([ordered]@{ id = 'section-id' })
+
+    $completePage = Join-Path $verifySection (Get-StableId -Value 'complete-page-id')
+    $completeAssets = Join-Path $completePage 'assets'
+    New-Item -ItemType Directory -Path $completeAssets -Force | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $completePage 'page.raw.html'), '<html>raw</html>')
+    [System.IO.File]::WriteAllText((Join-Path $completePage 'page.local.html'), '<html>local</html>')
+    Write-JsonFile -Path (Join-Path $completePage 'layout.json') -Value ([ordered]@{ absoluteBlockCount = 0 })
+    Write-JsonFile -Path (Join-Path $completePage 'page.json') -Value ([ordered]@{
+        title = 'Complete page'
+        resources = @([ordered]@{ fileName = 'image.bin' })
+    })
+    [System.IO.File]::WriteAllBytes((Join-Path $completeAssets 'image.bin'), [byte[]](1, 2, 3))
+
+    $incompletePageId = 'incomplete-page-id'
+    $incompletePage = Join-Path $verifySection (Get-StableId -Value $incompletePageId)
+    $incompleteAssets = Join-Path $incompletePage 'assets'
+    New-Item -ItemType Directory -Path $incompleteAssets -Force | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $incompletePage 'page.raw.html'), '<html>partial</html>')
+    [System.IO.File]::WriteAllText((Join-Path $incompleteAssets 'image.bin.part'), 'partial')
+
+    $emptyPage = Join-Path $verifySection (Get-StableId -Value 'empty-page-id')
+    New-Item -ItemType Directory -Path $emptyPage -Force | Out-Null
+    Write-JsonFile -Path (Join-Path $verifyOutput 'manifest.json') -Value ([ordered]@{
+        failures = @([ordered]@{
+            pageId = $incompletePageId
+            pageTitle = 'Incomplete page'
+        })
+    })
+
+    $verification = Test-OneNoteArchive -OutputRoot $verifyOutput
+    Assert-Equal 0 $verification.apiRequests '로컬 검증은 API를 호출하지 않아야 합니다.'
+    Assert-Equal 3 $verification.pagesChecked '모든 페이지 디렉터리를 검사해야 합니다.'
+    Assert-Equal 1 $verification.completePages '완전한 페이지 수가 잘못됐습니다.'
+    Assert-Equal 2 $verification.incompletePages '불완전한 페이지 수가 잘못됐습니다.'
+    $knownIncomplete = @($verification.issues | Where-Object title -eq 'Incomplete page')
+    Assert-Equal 1 $knownIncomplete.Count 'manifest에서 실패한 페이지 제목을 찾아야 합니다.'
+    Assert-Equal $true (@($knownIncomplete[0].missingFiles) -contains 'layout.json') '누락된 layout.json을 찾아야 합니다.'
+    Assert-Equal 1 @($knownIncomplete[0].partFiles).Count '남은 .part 파일을 찾아야 합니다.'
 }
 finally {
     if (Test-Path -LiteralPath $temporaryRoot) {

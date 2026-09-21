@@ -3,7 +3,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('help', 'list', 'init', 'export', 'logout')]
+    [ValidateSet('help', 'list', 'init', 'export', 'verify', 'logout')]
     [string] $Command = 'help',
 
     [string] $Config = './config.local.json',
@@ -37,6 +37,7 @@ OneNote Archive Exporter
   pwsh ./onenote-export.ps1 list
   pwsh ./onenote-export.ps1 init
   pwsh ./onenote-export.ps1 export [-Force]
+  pwsh ./onenote-export.ps1 verify
   pwsh ./onenote-export.ps1 logout
 
 옵션:
@@ -45,6 +46,8 @@ OneNote Archive Exporter
   -Force           변경 여부와 관계없이 모든 페이지를 다시 받습니다.
   -RequestIntervalSeconds <seconds>
                    Graph 요청 사이의 최소 대기 시간. 기본값: 10초
+
+verify는 Graph에 연결하지 않고 로컬 output/archive의 완전성만 검사합니다.
 '@ | Write-Host
 }
 
@@ -304,6 +307,66 @@ function Invoke-ArchiveExport {
     }
 }
 
+function Invoke-ArchiveVerification {
+    param(
+        [Parameter(Mandatory)][string] $ConfigPath,
+        [string] $OutputOverride
+    )
+
+    $outputRootValue = $OutputOverride
+    if (-not $outputRootValue -and (Test-Path -LiteralPath $ConfigPath -PathType Leaf)) {
+        try {
+            $configuration = Get-Content -LiteralPath $ConfigPath -Raw -Encoding utf8 | ConvertFrom-Json
+            if ($configuration.outputRoot) {
+                $outputRootValue = [string] $configuration.outputRoot
+            }
+        }
+        catch {
+            Write-Warning "설정 파일을 읽지 못해 기본 output 디렉터리를 검사합니다: $($_.Exception.Message)"
+        }
+    }
+    if (-not $outputRootValue) {
+        $outputRootValue = './output'
+    }
+
+    $outputRoot = Resolve-ProjectPath -Path $outputRootValue
+    $result = Test-OneNoteArchive -OutputRoot $outputRoot
+    $reportPath = Join-Path $outputRoot 'verify-report.json'
+    Write-JsonFile -Path $reportPath -Value $result
+
+    Write-Host "`n로컬 아카이브 검증 완료 (Graph API 요청: 0회)"
+    Write-Host "- 섹션: $($result.sectionsChecked)"
+    Write-Host "- 페이지: $($result.pagesChecked)"
+    Write-Host "- 정상: $($result.completePages)"
+    Write-Host "- 불완전: $($result.incompletePages)"
+    Write-Host "- 보고서: $reportPath"
+
+    foreach ($warning in @($result.warnings)) {
+        Write-Warning $warning
+    }
+    foreach ($issue in @($result.issues)) {
+        $displayName = if ($issue.title) { $issue.title } else { '(제목 확인 불가)' }
+        Write-Host "`n[incomplete] $displayName"
+        Write-Host "  경로: $($issue.path)"
+        if (@($issue.missingFiles).Count -gt 0) {
+            Write-Host "  누락 파일: $(@($issue.missingFiles) -join ', ')"
+        }
+        if (@($issue.invalidFiles).Count -gt 0) {
+            Write-Host "  손상 파일: $(@($issue.invalidFiles) -join ', ')"
+        }
+        if (@($issue.missingResources).Count -gt 0) {
+            Write-Host "  누락 리소스: $(@($issue.missingResources) -join ', ')"
+        }
+        if (@($issue.partFiles).Count -gt 0) {
+            Write-Host "  미완료 임시 파일: $(@($issue.partFiles) -join ', ')"
+        }
+    }
+
+    if (-not $result.healthy) {
+        exit 2
+    }
+}
+
 $configPath = Resolve-ProjectPath -Path $Config
 Set-OneNoteRequestInterval -Seconds $RequestIntervalSeconds
 switch ($Command) {
@@ -319,5 +382,10 @@ switch ($Command) {
             -ConfigPath $configPath `
             -OutputOverride $Output `
             -ForceAll:$Force
+    }
+    'verify' {
+        Invoke-ArchiveVerification `
+            -ConfigPath $configPath `
+            -OutputOverride $Output
     }
 }

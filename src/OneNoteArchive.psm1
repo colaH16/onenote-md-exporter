@@ -159,6 +159,15 @@ function Get-GraphStatusCode {
     if ($errorText -match 'TooManyRequests|\b20166\b|status\s+code\s*:\s*429|\bHTTP\s+429\b') {
         return 429
     }
+    if ($errorText -match 'status\s+code\s*:\s*(?<status>408|500|502|503|504)\b|\bHTTP\s+(?<httpStatus>408|500|502|503|504)\b') {
+        $matchedStatus = if ($Matches['status']) { $Matches['status'] } else { $Matches['httpStatus'] }
+        return [int] $matchedStatus
+    }
+    if ($errorText -match '\bRequestTimeout\b') { return 408 }
+    if ($errorText -match '\bInternalServerError\b') { return 500 }
+    if ($errorText -match '\bBadGateway\b') { return 502 }
+    if ($errorText -match '\bServiceUnavailable\b') { return 503 }
+    if ($errorText -match '\bGatewayTimeout\b') { return 504 }
     return 0
 }
 
@@ -594,7 +603,11 @@ function Export-OneNotePage {
     $localHtmlPath = Join-Path $archivePagePath 'page.local.html'
     $assetsPath = Join-Path $archivePagePath 'assets'
 
-    if (-not $Force -and (Test-Path -LiteralPath $metadataPath) -and (Test-Path -LiteralPath $rawHtmlPath) -and (Test-Path -LiteralPath $localHtmlPath)) {
+    if (-not $Force -and
+        (Test-Path -LiteralPath $metadataPath) -and
+        (Test-Path -LiteralPath $layoutPath) -and
+        (Test-Path -LiteralPath $rawHtmlPath) -and
+        (Test-Path -LiteralPath $localHtmlPath)) {
         try {
             $existing = Get-Content -LiteralPath $metadataPath -Raw -Encoding utf8 | ConvertFrom-Json
             if ($existing.lastModifiedDateTime -eq $Page.lastModifiedDateTime) {
@@ -698,6 +711,153 @@ function Export-OneNotePage {
     }
 }
 
+function Test-OneNoteArchive {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string] $OutputRoot)
+
+    $archiveRoot = Join-Path $OutputRoot 'archive'
+    if (-not (Test-Path -LiteralPath $archiveRoot -PathType Container)) {
+        throw "아카이브 디렉터리가 없습니다: $archiveRoot"
+    }
+
+    $requiredFiles = @('page.raw.html', 'page.local.html', 'layout.json', 'page.json')
+    $failureTitles = @{}
+    $warnings = [System.Collections.Generic.List[string]]::new()
+    $manifestPath = Join-Path $OutputRoot 'manifest.json'
+    if (Test-Path -LiteralPath $manifestPath -PathType Leaf) {
+        try {
+            $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding utf8 | ConvertFrom-Json
+            foreach ($failure in @($manifest.failures)) {
+                $pageIdProperty = $failure.PSObject.Properties['pageId']
+                $pageTitleProperty = $failure.PSObject.Properties['pageTitle']
+                if ($null -ne $pageIdProperty -and $pageIdProperty.Value) {
+                    $stableId = Get-StableId -Value ([string] $pageIdProperty.Value)
+                    $failureTitles[$stableId] = if ($null -ne $pageTitleProperty) {
+                        [string] $pageTitleProperty.Value
+                    }
+                    else {
+                        ''
+                    }
+                }
+            }
+        }
+        catch {
+            $warnings.Add("manifest.json을 읽지 못했습니다: $($_.Exception.Message)")
+        }
+    }
+
+    $issues = [System.Collections.Generic.List[object]]::new()
+    $sectionsChecked = 0
+    $pagesChecked = 0
+    $sectionFiles = @(Get-ChildItem -LiteralPath $archiveRoot -Recurse -File -Filter 'section.json')
+    foreach ($sectionFile in $sectionFiles) {
+        $sectionsChecked++
+        $sectionPath = $sectionFile.Directory.FullName
+        foreach ($pageDirectory in @(Get-ChildItem -LiteralPath $sectionPath -Directory)) {
+            $pagesChecked++
+            $missingFiles = [System.Collections.Generic.List[string]]::new()
+            $invalidFiles = [System.Collections.Generic.List[string]]::new()
+            $missingResources = [System.Collections.Generic.List[string]]::new()
+            $metadata = $null
+            $title = $null
+
+            foreach ($requiredFile in $requiredFiles) {
+                $requiredPath = Join-Path $pageDirectory.FullName $requiredFile
+                if (-not (Test-Path -LiteralPath $requiredPath -PathType Leaf)) {
+                    $missingFiles.Add($requiredFile)
+                    continue
+                }
+                if ((Get-Item -LiteralPath $requiredPath).Length -eq 0) {
+                    $invalidFiles.Add("$requiredFile (빈 파일)")
+                }
+            }
+
+            $metadataPath = Join-Path $pageDirectory.FullName 'page.json'
+            if ((Test-Path -LiteralPath $metadataPath -PathType Leaf) -and
+                (Get-Item -LiteralPath $metadataPath).Length -gt 0) {
+                try {
+                    $metadata = Get-Content -LiteralPath $metadataPath -Raw -Encoding utf8 | ConvertFrom-Json
+                    $titleProperty = $metadata.PSObject.Properties['title']
+                    if ($null -ne $titleProperty) {
+                        $title = [string] $titleProperty.Value
+                    }
+                }
+                catch {
+                    $invalidFiles.Add("page.json (JSON 오류: $($_.Exception.Message))")
+                }
+            }
+
+            $layoutPath = Join-Path $pageDirectory.FullName 'layout.json'
+            if ((Test-Path -LiteralPath $layoutPath -PathType Leaf) -and
+                (Get-Item -LiteralPath $layoutPath).Length -gt 0) {
+                try {
+                    [void] (Get-Content -LiteralPath $layoutPath -Raw -Encoding utf8 | ConvertFrom-Json)
+                }
+                catch {
+                    $invalidFiles.Add("layout.json (JSON 오류: $($_.Exception.Message))")
+                }
+            }
+
+            if ($null -ne $metadata) {
+                $resourcesProperty = $metadata.PSObject.Properties['resources']
+                if ($null -ne $resourcesProperty) {
+                    foreach ($resource in @($resourcesProperty.Value)) {
+                        $fileNameProperty = $resource.PSObject.Properties['fileName']
+                        if ($null -eq $fileNameProperty -or -not $fileNameProperty.Value) {
+                            continue
+                        }
+                        $resourcePath = Join-Path (Join-Path $pageDirectory.FullName 'assets') ([string] $fileNameProperty.Value)
+                        if (-not (Test-Path -LiteralPath $resourcePath -PathType Leaf)) {
+                            $missingResources.Add([string] $fileNameProperty.Value)
+                        }
+                        elseif ((Get-Item -LiteralPath $resourcePath).Length -eq 0) {
+                            $missingResources.Add("$($fileNameProperty.Value) (빈 파일)")
+                        }
+                    }
+                }
+            }
+
+            $partFiles = @(
+                Get-ChildItem -LiteralPath $pageDirectory.FullName -Recurse -File -Filter '*.part' |
+                    ForEach-Object { [System.IO.Path]::GetRelativePath($pageDirectory.FullName, $_.FullName) }
+            )
+
+            if (-not $title -and $failureTitles.ContainsKey($pageDirectory.Name)) {
+                $title = [string] $failureTitles[$pageDirectory.Name]
+            }
+
+            if ($missingFiles.Count -gt 0 -or
+                $invalidFiles.Count -gt 0 -or
+                $missingResources.Count -gt 0 -or
+                $partFiles.Count -gt 0) {
+                $issues.Add([ordered]@{
+                    type = 'incomplete-page'
+                    title = $title
+                    path = [System.IO.Path]::GetRelativePath($archiveRoot, $pageDirectory.FullName)
+                    missingFiles = $missingFiles.ToArray()
+                    invalidFiles = $invalidFiles.ToArray()
+                    missingResources = $missingResources.ToArray()
+                    partFiles = @($partFiles)
+                })
+            }
+        }
+    }
+
+    return [pscustomobject][ordered]@{
+        schemaVersion = 1
+        checkedAt = [DateTimeOffset]::UtcNow.ToString('o')
+        apiRequests = 0
+        archiveRoot = $archiveRoot
+        healthy = $issues.Count -eq 0
+        sectionsChecked = $sectionsChecked
+        pagesChecked = $pagesChecked
+        completePages = $pagesChecked - $issues.Count
+        incompletePages = $issues.Count
+        warnings = $warnings.ToArray()
+        issues = $issues.ToArray()
+    }
+}
+
 Export-ModuleMember -Function @(
     'Connect-OneNoteGraph',
     'ConvertFrom-NumberSelection',
@@ -709,5 +869,6 @@ Export-ModuleMember -Function @(
     'Get-OneNoteSectionPages',
     'Get-StableId',
     'Set-OneNoteRequestInterval',
+    'Test-OneNoteArchive',
     'Write-JsonFile'
 )

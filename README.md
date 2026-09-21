@@ -114,6 +114,22 @@ pwsh ./onenote-export.ps1 export -RequestIntervalSeconds 10
 
 실행이 중단되어도 다시 `export`하면 완료된 페이지를 재사용합니다. 원격에서 삭제된 페이지의 로컬 파일은 자동으로 삭제하지 않습니다.
 
+### 로컬 완전성 검사
+
+내보내기가 끝난 뒤 다음 명령으로 아카이브를 검사합니다.
+
+```fish
+pwsh ./onenote-export.ps1 verify
+```
+
+이 명령은 Microsoft Graph에 로그인하거나 API를 호출하지 않습니다. 각 페이지의 `page.raw.html`, `page.local.html`, `layout.json`, `page.json` 존재 여부와 빈 파일·잘못된 JSON·누락된 리소스·남은 `.part` 파일을 로컬에서만 확인합니다. 결과는 화면과 `output/verify-report.json`에 기록되며, 불완전한 페이지가 있으면 종료 코드 `2`를 반환합니다.
+
+다른 출력 경로를 검사하려면:
+
+```fish
+pwsh ./onenote-export.ps1 verify -Output /path/to/output
+```
+
 ## 자유 배치와 주석
 
 `layout.json`은 절대 위치 요소의 태그, OneNote ID, 좌표, 크기와 HTML 내 위치를 기록합니다. 단어 옆에 배치한 해설처럼 공간 관계가 의미를 가지는 페이지를 찾는 근거로 사용합니다.
