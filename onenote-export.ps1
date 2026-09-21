@@ -3,7 +3,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('help', 'list', 'init', 'export', 'verify', 'logout')]
+    [ValidateSet('help', 'list', 'init', 'export', 'verify', 'repair', 'logout')]
     [string] $Command = 'help',
 
     [string] $Config = './config.local.json',
@@ -38,6 +38,7 @@ OneNote Archive Exporter
   pwsh ./onenote-export.ps1 init
   pwsh ./onenote-export.ps1 export [-Force]
   pwsh ./onenote-export.ps1 verify
+  pwsh ./onenote-export.ps1 repair
   pwsh ./onenote-export.ps1 logout
 
 옵션:
@@ -48,7 +49,32 @@ OneNote Archive Exporter
                    Graph 요청 사이의 최소 대기 시간. 기본값: 10초
 
 verify는 Graph에 연결하지 않고 로컬 output/archive의 완전성만 검사합니다.
+repair는 verify에서 발견한 불완전한 페이지만 Graph에서 다시 받습니다.
 '@ | Write-Host
+}
+
+function Resolve-ArchiveOutputRoot {
+    param(
+        [Parameter(Mandatory)][string] $ConfigPath,
+        [string] $OutputOverride
+    )
+
+    $outputRootValue = $OutputOverride
+    if (-not $outputRootValue -and (Test-Path -LiteralPath $ConfigPath -PathType Leaf)) {
+        try {
+            $configuration = Get-Content -LiteralPath $ConfigPath -Raw -Encoding utf8 | ConvertFrom-Json
+            if ($configuration.outputRoot) {
+                $outputRootValue = [string] $configuration.outputRoot
+            }
+        }
+        catch {
+            Write-Warning "설정 파일을 읽지 못해 기본 output 디렉터리를 사용합니다: $($_.Exception.Message)"
+        }
+    }
+    if (-not $outputRootValue) {
+        $outputRootValue = './output'
+    }
+    return Resolve-ProjectPath -Path $outputRootValue
 }
 
 function Show-Notebooks {
@@ -313,23 +339,7 @@ function Invoke-ArchiveVerification {
         [string] $OutputOverride
     )
 
-    $outputRootValue = $OutputOverride
-    if (-not $outputRootValue -and (Test-Path -LiteralPath $ConfigPath -PathType Leaf)) {
-        try {
-            $configuration = Get-Content -LiteralPath $ConfigPath -Raw -Encoding utf8 | ConvertFrom-Json
-            if ($configuration.outputRoot) {
-                $outputRootValue = [string] $configuration.outputRoot
-            }
-        }
-        catch {
-            Write-Warning "설정 파일을 읽지 못해 기본 output 디렉터리를 검사합니다: $($_.Exception.Message)"
-        }
-    }
-    if (-not $outputRootValue) {
-        $outputRootValue = './output'
-    }
-
-    $outputRoot = Resolve-ProjectPath -Path $outputRootValue
+    $outputRoot = Resolve-ArchiveOutputRoot -ConfigPath $ConfigPath -OutputOverride $OutputOverride
     $result = Test-OneNoteArchive -OutputRoot $outputRoot
     $reportPath = Join-Path $outputRoot 'verify-report.json'
     Write-JsonFile -Path $reportPath -Value $result
@@ -367,6 +377,54 @@ function Invoke-ArchiveVerification {
     }
 }
 
+function Invoke-ArchiveRepair {
+    param(
+        [Parameter(Mandatory)][string] $ConfigPath,
+        [string] $OutputOverride
+    )
+
+    $outputRoot = Resolve-ArchiveOutputRoot -ConfigPath $ConfigPath -OutputOverride $OutputOverride
+    $verification = Test-OneNoteArchive -OutputRoot $outputRoot
+    if ($verification.healthy) {
+        Write-Host '불완전한 페이지가 없습니다. Graph API를 호출하지 않았습니다.'
+        return
+    }
+
+    $repairableCount = @($verification.issues | Where-Object pageId).Count
+    if ($repairableCount -eq 0) {
+        Write-Warning '불완전한 페이지의 OneNote ID를 찾지 못해 자동 복구할 수 없습니다.'
+        Write-Warning '전체 export를 다시 실행하면 해당 페이지를 다시 발견할 수 있습니다.'
+        exit 2
+    }
+
+    Write-Host "불완전한 페이지 $($verification.incompletePages)개 중 $repairableCount개만 다시 받습니다."
+    Connect-OneNoteGraph
+    $result = Repair-OneNoteArchive -OutputRoot $outputRoot
+    $reportPath = Join-Path $outputRoot 'repair-report.json'
+    Write-JsonFile -Path $reportPath -Value $result
+
+    foreach ($page in @($result.repaired)) {
+        Write-Host "[repaired] $($page.title)"
+    }
+    foreach ($page in @($result.failed)) {
+        Write-Warning "복구 실패: $($page.title) - $($page.error)"
+    }
+    foreach ($page in @($result.unrepairable)) {
+        Write-Warning "자동 복구 불가: $($page.title) - $($page.reason)"
+    }
+
+    Write-Host "`n복구 완료"
+    Write-Host "- 복구 성공: $($result.repairedPages)"
+    Write-Host "- 복구 실패: $($result.failedPages)"
+    Write-Host "- 자동 복구 불가: $($result.unrepairablePages)"
+    Write-Host "- 남은 불완전 페이지: $($result.remainingIncompletePages)"
+    Write-Host "- 보고서: $reportPath"
+
+    if ($result.remainingIncompletePages -gt 0) {
+        exit 2
+    }
+}
+
 $configPath = Resolve-ProjectPath -Path $Config
 Set-OneNoteRequestInterval -Seconds $RequestIntervalSeconds
 switch ($Command) {
@@ -385,6 +443,11 @@ switch ($Command) {
     }
     'verify' {
         Invoke-ArchiveVerification `
+            -ConfigPath $configPath `
+            -OutputOverride $Output
+    }
+    'repair' {
+        Invoke-ArchiveRepair `
             -ConfigPath $configPath `
             -OutputOverride $Output
     }

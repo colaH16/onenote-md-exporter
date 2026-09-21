@@ -369,6 +369,15 @@ function Get-OneNoteSectionPages {
     return @(Get-OneNoteGraphCollection -Uri $uri) | Sort-Object order
 }
 
+function Get-OneNotePage {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string] $PageId)
+
+    $encodedId = [uri]::EscapeDataString($PageId)
+    $uri = "$script:GraphRoot/pages/${encodedId}?pagelevel=true&`$select=id,title,createdDateTime,lastModifiedDateTime,level,order,links,contentUrl"
+    return Invoke-OneNoteGraphRequest -Uri $uri
+}
+
 function Get-HtmlAttribute {
     [CmdletBinding()]
     param(
@@ -721,7 +730,7 @@ function Test-OneNoteArchive {
     }
 
     $requiredFiles = @('page.raw.html', 'page.local.html', 'layout.json', 'page.json')
-    $failureTitles = @{}
+    $failurePages = @{}
     $warnings = [System.Collections.Generic.List[string]]::new()
     $manifestPath = Join-Path $OutputRoot 'manifest.json'
     if (Test-Path -LiteralPath $manifestPath -PathType Leaf) {
@@ -732,11 +741,14 @@ function Test-OneNoteArchive {
                 $pageTitleProperty = $failure.PSObject.Properties['pageTitle']
                 if ($null -ne $pageIdProperty -and $pageIdProperty.Value) {
                     $stableId = Get-StableId -Value ([string] $pageIdProperty.Value)
-                    $failureTitles[$stableId] = if ($null -ne $pageTitleProperty) {
-                        [string] $pageTitleProperty.Value
-                    }
-                    else {
-                        ''
+                    $failurePages[$stableId] = [pscustomobject]@{
+                        pageId = [string] $pageIdProperty.Value
+                        pageTitle = if ($null -ne $pageTitleProperty) {
+                            [string] $pageTitleProperty.Value
+                        }
+                        else {
+                            ''
+                        }
                     }
                 }
             }
@@ -760,6 +772,7 @@ function Test-OneNoteArchive {
             $missingResources = [System.Collections.Generic.List[string]]::new()
             $metadata = $null
             $title = $null
+            $pageId = $null
 
             foreach ($requiredFile in $requiredFiles) {
                 $requiredPath = Join-Path $pageDirectory.FullName $requiredFile
@@ -780,6 +793,10 @@ function Test-OneNoteArchive {
                     $titleProperty = $metadata.PSObject.Properties['title']
                     if ($null -ne $titleProperty) {
                         $title = [string] $titleProperty.Value
+                    }
+                    $idProperty = $metadata.PSObject.Properties['id']
+                    if ($null -ne $idProperty) {
+                        $pageId = [string] $idProperty.Value
                     }
                 }
                 catch {
@@ -822,8 +839,14 @@ function Test-OneNoteArchive {
                     ForEach-Object { [System.IO.Path]::GetRelativePath($pageDirectory.FullName, $_.FullName) }
             )
 
-            if (-not $title -and $failureTitles.ContainsKey($pageDirectory.Name)) {
-                $title = [string] $failureTitles[$pageDirectory.Name]
+            if ($failurePages.ContainsKey($pageDirectory.Name)) {
+                $failedPage = $failurePages[$pageDirectory.Name]
+                if (-not $title) {
+                    $title = [string] $failedPage.pageTitle
+                }
+                if (-not $pageId) {
+                    $pageId = [string] $failedPage.pageId
+                }
             }
 
             if ($missingFiles.Count -gt 0 -or
@@ -832,6 +855,7 @@ function Test-OneNoteArchive {
                 $partFiles.Count -gt 0) {
                 $issues.Add([ordered]@{
                     type = 'incomplete-page'
+                    pageId = $pageId
                     title = $title
                     path = [System.IO.Path]::GetRelativePath($archiveRoot, $pageDirectory.FullName)
                     missingFiles = $missingFiles.ToArray()
@@ -858,17 +882,85 @@ function Test-OneNoteArchive {
     }
 }
 
+function Repair-OneNoteArchive {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string] $OutputRoot)
+
+    $archiveRoot = Join-Path $OutputRoot 'archive'
+    $before = Test-OneNoteArchive -OutputRoot $OutputRoot
+    $repaired = [System.Collections.Generic.List[object]]::new()
+    $failed = [System.Collections.Generic.List[object]]::new()
+    $unrepairable = [System.Collections.Generic.List[object]]::new()
+
+    foreach ($issue in @($before.issues)) {
+        if (-not $issue.pageId) {
+            $unrepairable.Add([ordered]@{
+                title = $issue.title
+                path = $issue.path
+                reason = 'page.json과 manifest.json에서 OneNote 페이지 ID를 찾지 못했습니다.'
+            })
+            continue
+        }
+
+        $pageDirectory = Join-Path $archiveRoot ([string] $issue.path)
+        $sectionDirectory = Split-Path -Parent $pageDirectory
+        try {
+            $page = Get-OneNotePage -PageId ([string] $issue.pageId)
+            $result = Export-OneNotePage `
+                -Page $page `
+                -ArchiveSectionPath $sectionDirectory `
+                -Force
+
+            foreach ($partFile in @(Get-ChildItem -LiteralPath $pageDirectory -Recurse -File -Filter '*.part')) {
+                Remove-Item -LiteralPath $partFile.FullName -Force
+            }
+
+            $repaired.Add([ordered]@{
+                pageId = $issue.pageId
+                title = $page.title
+                path = $issue.path
+                resources = $result.ResourceCount
+            })
+        }
+        catch {
+            $failed.Add([ordered]@{
+                pageId = $issue.pageId
+                title = $issue.title
+                path = $issue.path
+                error = $_.Exception.Message
+            })
+        }
+    }
+
+    $after = Test-OneNoteArchive -OutputRoot $OutputRoot
+    return [pscustomobject][ordered]@{
+        schemaVersion = 1
+        startedWithIncompletePages = $before.incompletePages
+        repairedPages = $repaired.Count
+        failedPages = $failed.Count
+        unrepairablePages = $unrepairable.Count
+        remainingIncompletePages = $after.incompletePages
+        completedAt = [DateTimeOffset]::UtcNow.ToString('o')
+        repaired = $repaired.ToArray()
+        failed = $failed.ToArray()
+        unrepairable = $unrepairable.ToArray()
+        verification = $after
+    }
+}
+
 Export-ModuleMember -Function @(
     'Connect-OneNoteGraph',
     'ConvertFrom-NumberSelection',
     'ConvertTo-SafeName',
     'Disconnect-OneNoteGraph',
     'Export-OneNotePage',
+    'Get-OneNotePage',
     'Get-OneNoteNotebookSections',
     'Get-OneNoteNotebooks',
     'Get-OneNoteSectionPages',
     'Get-StableId',
     'Set-OneNoteRequestInterval',
+    'Repair-OneNoteArchive',
     'Test-OneNoteArchive',
     'Write-JsonFile'
 )

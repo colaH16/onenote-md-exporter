@@ -130,6 +130,14 @@ pwsh ./onenote-export.ps1 verify
 pwsh ./onenote-export.ps1 verify -Output /path/to/output
 ```
 
+불완전한 페이지가 발견되면 전체 노트북을 다시 순회하지 않고 해당 페이지만 복구할 수 있습니다.
+
+```fish
+pwsh ./onenote-export.ps1 repair
+```
+
+`repair`는 `page.json` 또는 마지막 `manifest.json`에 기록된 OneNote 페이지 ID를 사용합니다. 불완전한 페이지만 Graph에서 다시 받고 리소스 다운로드를 마친 뒤 로컬 검증을 다시 실행합니다. 결과는 `output/repair-report.json`에 기록됩니다. 페이지 ID까지 유실된 항목은 자동 복구하지 않으며 전체 `export`가 필요하다고 표시합니다.
+
 ## 자유 배치와 주석
 
 `layout.json`은 절대 위치 요소의 태그, OneNote ID, 좌표, 크기와 HTML 내 위치를 기록합니다. 단어 옆에 배치한 해설처럼 공간 관계가 의미를 가지는 페이지를 찾는 근거로 사용합니다.

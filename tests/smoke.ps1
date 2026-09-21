@@ -191,8 +191,49 @@ try {
     Assert-Equal 2 $verification.incompletePages '불완전한 페이지 수가 잘못됐습니다.'
     $knownIncomplete = @($verification.issues | Where-Object title -eq 'Incomplete page')
     Assert-Equal 1 $knownIncomplete.Count 'manifest에서 실패한 페이지 제목을 찾아야 합니다.'
+    Assert-Equal $incompletePageId $knownIncomplete[0].pageId 'manifest에서 복구할 페이지 ID를 찾아야 합니다.'
     Assert-Equal $true (@($knownIncomplete[0].missingFiles) -contains 'layout.json') '누락된 layout.json을 찾아야 합니다.'
     Assert-Equal 1 @($knownIncomplete[0].partFiles).Count '남은 .part 파일을 찾아야 합니다.'
+
+    $repairResult = & $archiveModule {
+        param($OutputRoot, $Html)
+
+        $script:FakeRepairHtml = $Html
+        function Invoke-MgGraphRequest {
+            [CmdletBinding()]
+            param(
+                [string] $Method,
+                [string] $Uri,
+                [string] $OutputFilePath
+            )
+
+            if ($Uri -match '/pages/.+/content') {
+                [System.IO.File]::WriteAllText($OutputFilePath, $script:FakeRepairHtml, [System.Text.UTF8Encoding]::new($false))
+            }
+            else {
+                [System.IO.File]::WriteAllBytes($OutputFilePath, [byte[]](1, 2, 3, 4))
+            }
+        }
+
+        function Get-OneNotePage {
+            param([string] $PageId)
+            return [pscustomobject]@{
+                id = $PageId
+                title = 'Incomplete page'
+                createdDateTime = '2026-01-01T00:00:00Z'
+                lastModifiedDateTime = '2026-01-02T00:00:00Z'
+                level = 0
+                order = 1
+                links = [pscustomobject]@{}
+            }
+        }
+
+        Repair-OneNoteArchive -OutputRoot $OutputRoot
+    } $verifyOutput $sampleHtml
+    Assert-Equal 1 $repairResult.repairedPages '복구 가능한 페이지만 다시 받아야 합니다.'
+    Assert-Equal 0 $repairResult.failedPages '대상 페이지 복구가 실패했습니다.'
+    Assert-Equal 1 $repairResult.unrepairablePages 'ID가 없는 빈 디렉터리는 자동 복구 불가로 남겨야 합니다.'
+    Assert-Equal 1 $repairResult.remainingIncompletePages '복구 후 남은 불완전 페이지 수가 잘못됐습니다.'
 }
 finally {
     if (Test-Path -LiteralPath $temporaryRoot) {
