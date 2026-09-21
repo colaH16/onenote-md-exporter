@@ -3,7 +3,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('help', 'list', 'init', 'export')]
+    [ValidateSet('help', 'list', 'init', 'export', 'logout')]
     [string] $Command = 'help',
 
     [string] $Config = './config.local.json',
@@ -37,6 +37,7 @@ OneNote Archive Exporter
   pwsh ./onenote-export.ps1 list
   pwsh ./onenote-export.ps1 init
   pwsh ./onenote-export.ps1 export [-Force]
+  pwsh ./onenote-export.ps1 logout
 
 옵션:
   -Config <path>   로컬 설정 파일. 기본값: ./config.local.json
@@ -312,6 +313,7 @@ switch ($Command) {
         Show-Notebooks -Notebooks @(Get-OneNoteNotebooks)
     }
     'init' { Initialize-Configuration -ConfigPath $configPath }
+    'logout' { Disconnect-OneNoteGraph }
     'export' {
         Invoke-ArchiveExport `
             -ConfigPath $configPath `

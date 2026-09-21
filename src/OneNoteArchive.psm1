@@ -116,12 +116,30 @@ function Connect-OneNoteGraph {
     }
 
     Import-Module Microsoft.Graph.Authentication -ErrorAction Stop
+    $context = Get-MgContext -ErrorAction SilentlyContinue
+    if ($null -ne $context -and $context.Account -and @($context.Scopes) -contains 'Notes.Read') {
+        Write-Host "저장된 Microsoft Graph 로그인 사용: $($context.Account)"
+        return
+    }
+
     Connect-MgGraph `
         -TenantId consumers `
         -Scopes 'Notes.Read' `
         -UseDeviceCode `
-        -ContextScope Process `
+        -ContextScope CurrentUser `
         -NoWelcome
+}
+
+function Disconnect-OneNoteGraph {
+    [CmdletBinding()]
+    param()
+
+    if (-not (Get-Module -ListAvailable -Name Microsoft.Graph.Authentication)) {
+        return
+    }
+    Import-Module Microsoft.Graph.Authentication -ErrorAction Stop
+    Disconnect-MgGraph -ErrorAction SilentlyContinue | Out-Null
+    Write-Host '저장된 Microsoft Graph 로그인을 삭제했습니다.'
 }
 
 function Get-GraphStatusCode {
@@ -684,6 +702,7 @@ Export-ModuleMember -Function @(
     'Connect-OneNoteGraph',
     'ConvertFrom-NumberSelection',
     'ConvertTo-SafeName',
+    'Disconnect-OneNoteGraph',
     'Export-OneNotePage',
     'Get-OneNoteNotebookSections',
     'Get-OneNoteNotebooks',
