@@ -1,0 +1,14 @@
+# Contains private notebook names and IDs.
+config.local.json
+
+# Exported OneNote content must never be committed.
+output/
+exports/
+archive/
+
+# Temporary files and editor state.
+*.part
+*.tmp
+.DS_Store
+.idea/
+.vscode/

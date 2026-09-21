@@ -1,0 +1,17 @@
+name: test
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run PowerShell smoke tests
+        shell: pwsh
+        run: ./tests/smoke.ps1
