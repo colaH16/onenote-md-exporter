@@ -2,6 +2,39 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $script:GraphRoot = 'https://graph.microsoft.com/v1.0/me/onenote'
+$script:MinimumRequestIntervalSeconds = 10.0
+$script:LastRequestStartedAt = [DateTimeOffset]::MinValue
+
+function Set-OneNoteRequestInterval {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [ValidateRange(0, 300)]
+        [double] $Seconds
+    )
+
+    $script:MinimumRequestIntervalSeconds = $Seconds
+    $script:LastRequestStartedAt = [DateTimeOffset]::MinValue
+}
+
+function Wait-OneNoteRequestSlot {
+    [CmdletBinding()]
+    param()
+
+    if ($script:MinimumRequestIntervalSeconds -le 0) {
+        $script:LastRequestStartedAt = [DateTimeOffset]::UtcNow
+        return
+    }
+
+    $now = [DateTimeOffset]::UtcNow
+    $elapsedSeconds = ($now - $script:LastRequestStartedAt).TotalSeconds
+    $remainingSeconds = $script:MinimumRequestIntervalSeconds - $elapsedSeconds
+    if ($remainingSeconds -gt 0) {
+        $milliseconds = [int] [Math]::Ceiling($remainingSeconds * 1000)
+        Start-Sleep -Milliseconds $milliseconds
+    }
+    $script:LastRequestStartedAt = [DateTimeOffset]::UtcNow
+}
 
 function ConvertTo-SafeName {
     [CmdletBinding()]
@@ -101,7 +134,12 @@ function Get-GraphStatusCode {
         }
     }
     catch {
-        return 0
+        # Some Graph SDK exceptions don't expose Response after its internal retries.
+    }
+
+    $errorText = "$ErrorRecord`n$($ErrorRecord.Exception)"
+    if ($errorText -match 'TooManyRequests|\b20166\b|status\s+code\s*:\s*429|\bHTTP\s+429\b') {
+        return 429
     }
     return 0
 }
@@ -115,8 +153,13 @@ function Invoke-OneNoteGraphRequest {
         [ValidateRange(1, 10)][int] $MaximumAttempts = 6
     )
 
-    for ($attempt = 1; $attempt -le $MaximumAttempts; $attempt++) {
+    $attempt = 0
+    $throttleAttempt = 0
+    while ($true) {
+        Wait-OneNoteRequestSlot
         try {
+            $previousProgressPreference = $ProgressPreference
+            $ProgressPreference = 'SilentlyContinue'
             if ($OutputFilePath) {
                 $parent = Split-Path -Parent $OutputFilePath
                 New-Item -ItemType Directory -Path $parent -Force | Out-Null
@@ -139,14 +182,29 @@ function Invoke-OneNoteGraphRequest {
         }
         catch {
             $statusCode = Get-GraphStatusCode -ErrorRecord $_
-            $retryable = $statusCode -eq 408 -or $statusCode -eq 429 -or $statusCode -ge 500
-            if (-not $retryable -or $attempt -eq $MaximumAttempts) {
+            if ($statusCode -eq 429) {
+                $throttleAttempt++
+                $exponent = [Math]::Min($throttleAttempt - 1, 4)
+                $delaySeconds = [int] [Math]::Min(900, 60 * [Math]::Pow(2, $exponent))
+                Write-Warning "OneNote API 사용량 제한(429/20166)입니다. $delaySeconds초 쉬고 같은 요청을 재시도합니다. 중단할 필요가 없습니다."
+                Start-Sleep -Seconds $delaySeconds
+                continue
+            }
+
+            $attempt++
+            $retryable = $statusCode -eq 408 -or $statusCode -ge 500
+            if (-not $retryable -or $attempt -ge $MaximumAttempts) {
                 throw
             }
 
             $delaySeconds = [Math]::Min(60, [Math]::Pow(2, $attempt))
             Write-Warning "Graph 요청 실패(HTTP $statusCode). $delaySeconds초 후 재시도합니다. ($attempt/$MaximumAttempts)"
             Start-Sleep -Seconds $delaySeconds
+        }
+        finally {
+            if ($null -ne $previousProgressPreference) {
+                $ProgressPreference = $previousProgressPreference
+            }
         }
     }
 }
@@ -631,5 +689,6 @@ Export-ModuleMember -Function @(
     'Get-OneNoteNotebooks',
     'Get-OneNoteSectionPages',
     'Get-StableId',
+    'Set-OneNoteRequestInterval',
     'Write-JsonFile'
 )

@@ -62,6 +62,8 @@ pwsh ./onenote-export.ps1 init
 pwsh ./onenote-export.ps1 export
 ```
 
+OneNote Graph의 공식 한도보다 여유 있게 모든 요청 사이를 기본 10초씩 띄웁니다. `429 / 20166 TooManyRequests`가 발생하면 60초부터 최대 15분까지 지수적으로 쉬고 같은 요청을 계속 재시도하므로 사용자가 다시 실행할 필요가 없습니다.
+
 결과는 기본적으로 `output/`에 생성됩니다.
 
 ```text
@@ -80,6 +82,12 @@ output/
 
 ```fish
 pwsh ./onenote-export.ps1 export -Force
+```
+
+요청 간격은 변경할 수 있지만, 전체 노트북 내보내기에서는 기본값보다 낮추지 않는 것을 권장합니다.
+
+```fish
+pwsh ./onenote-export.ps1 export -RequestIntervalSeconds 10
 ```
 
 ## 검증

@@ -8,7 +8,10 @@ param(
 
     [string] $Config = './config.local.json',
     [string] $Output,
-    [switch] $Force
+    [switch] $Force,
+
+    [ValidateRange(0, 300)]
+    [double] $RequestIntervalSeconds = 10
 )
 
 Set-StrictMode -Version Latest
@@ -39,6 +42,8 @@ OneNote Archive Exporter
   -Config <path>   로컬 설정 파일. 기본값: ./config.local.json
   -Output <path>   출력 디렉터리. 설정의 outputRoot보다 우선합니다.
   -Force           변경 여부와 관계없이 모든 페이지를 다시 받습니다.
+  -RequestIntervalSeconds <seconds>
+                   Graph 요청 사이의 최소 대기 시간. 기본값: 10초
 '@ | Write-Host
 }
 
@@ -176,7 +181,20 @@ function Invoke-ArchiveExport {
         $archiveNotebookPath = Join-Path $archiveRoot $notebookDirectoryName
         New-Item -ItemType Directory -Path $archiveNotebookPath -Force | Out-Null
 
-        $sections = @(Get-OneNoteNotebookSections -Notebook $notebook)
+        try {
+            $sections = @(Get-OneNoteNotebookSections -Notebook $notebook)
+        }
+        catch {
+            $manifest.failures.Add([ordered]@{
+                type = 'notebook-sections-failed'
+                notebookId = $notebook.id
+                notebookName = $notebook.displayName
+                error = $_.Exception.Message
+            })
+            Write-Warning "노트북 섹션 조회 실패: $($notebook.displayName) - $($_.Exception.Message)"
+            Write-JsonFile -Path $manifestPath -Value $manifest
+            continue
+        }
         $notebookManifest = [ordered]@{
             id = $notebook.id
             name = $notebook.displayName
@@ -205,7 +223,22 @@ function Invoke-ArchiveExport {
             Write-JsonFile -Path (Join-Path $archiveSectionPath 'section.json') -Value $section
 
             Write-Host "  -> $($section.displayName)"
-            $pages = @(Get-OneNoteSectionPages -SectionId ([string] $section.id))
+            try {
+                $pages = @(Get-OneNoteSectionPages -SectionId ([string] $section.id))
+            }
+            catch {
+                $manifest.failures.Add([ordered]@{
+                    type = 'section-pages-failed'
+                    notebookId = $notebook.id
+                    notebookName = $notebook.displayName
+                    sectionId = $section.id
+                    sectionName = $section.displayName
+                    error = $_.Exception.Message
+                })
+                Write-Warning "섹션 페이지 조회 실패: $($section.displayName) - $($_.Exception.Message)"
+                Write-JsonFile -Path $manifestPath -Value $manifest
+                continue
+            }
             $manifest.stats.pagesDiscovered += $pages.Count
             $notebookManifest.pageCount += $pages.Count
 
@@ -265,12 +298,13 @@ function Invoke-ArchiveExport {
     Write-Host "- 시각 검토 필요: $($manifest.stats.needsVisualReview)"
     Write-Host "- manifest: $manifestPath"
 
-    if ($manifest.stats.pagesFailed -gt 0 -or $manifest.discoveredNotebookCount -ne $manifest.selectedNotebookCount) {
+    if ($manifest.failures.Count -gt 0 -or $manifest.discoveredNotebookCount -ne $manifest.selectedNotebookCount) {
         exit 2
     }
 }
 
 $configPath = Resolve-ProjectPath -Path $Config
+Set-OneNoteRequestInterval -Seconds $RequestIntervalSeconds
 switch ($Command) {
     'help' { Show-Help }
     'list' {

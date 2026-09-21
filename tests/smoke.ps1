@@ -5,6 +5,7 @@ $ErrorActionPreference = 'Stop'
 
 $modulePath = Join-Path $PSScriptRoot '../src/OneNoteArchive.psm1'
 Import-Module $modulePath -Force
+Set-OneNoteRequestInterval -Seconds 0
 
 function Assert-Equal {
     param($Expected, $Actual, [string] $Message)
@@ -56,6 +57,18 @@ $externalReferences = @(& $archiveModule {
     Get-ExternalMediaReferences -Html $Html
 } $sampleHtml)
 Assert-Equal 1 $externalReferences.Count '외부 iframe 참조를 기록해야 합니다.'
+
+$throttleStatus = 0
+try {
+    throw [System.Exception]::new('HTTP request failed: TooManyRequests, OneNote error 20166')
+}
+catch {
+    $throttleStatus = & $archiveModule {
+        param($ErrorRecord)
+        Get-GraphStatusCode -ErrorRecord $ErrorRecord
+    } $_
+}
+Assert-Equal 429 $throttleStatus 'SDK가 감싼 OneNote 20166 오류를 429로 감지해야 합니다.'
 
 $temporaryRoot = Join-Path ([System.IO.Path]::GetTempPath()) "onenote-md-exporter-$([guid]::NewGuid().ToString('N'))"
 New-Item -ItemType Directory -Path $temporaryRoot -Force | Out-Null
