@@ -252,7 +252,7 @@ macOS에서 받은 아카이브를 Linux에서 변환할 때는 `output/`과 함
 - 첨부 현황과 확장자별 개수는 `_meta/document-picker.md`에 생성됩니다.
 - 실제 태그별 페이지 수와 사용 안내는 `_meta/tag-guide.md`에 생성됩니다.
 
-코드 블록과 인라인 코드의 배경·여백·경계는 SilverBullet space 루트의 `STYLES.md`에 있는
+코드 블록의 경계와 인라인 코드의 둥근 배경·여백은 SilverBullet space 루트의 `STYLES.md`에 있는
 `space-style` 블록으로 조정합니다. 예시는
 [`examples/silverbullet-code-style.md`](examples/silverbullet-code-style.md)에 있습니다.
 이 파일은 `OneNote/markdown/` 밖에 두므로 변환 결과를 다시 동기화해도 유지됩니다.

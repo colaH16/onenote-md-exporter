@@ -43,7 +43,6 @@ html[data-theme="dark"] {
 #sb-editor .cm-line:not(.sb-line-fenced-code):not(.sb-line-code) .sb-code {
   background-color: var(--editor-code-background-color) !important;
   color: var(--editor-code-color);
-  border: 1px solid var(--cola-code-border);
   border-radius: 6px;
   padding: 0.05em 0.5em;
   box-decoration-break: clone;
