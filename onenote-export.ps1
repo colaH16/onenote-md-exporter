@@ -56,7 +56,7 @@ OneNote Archive Exporter
 verify는 Graph에 연결하지 않고 로컬 output/archive의 완전성만 검사합니다.
 repair는 verify에서 발견한 불완전한 페이지만 Graph에서 다시 받습니다.
 init-conversion은 백업 대상 중 Markdown·SilverBullet·RAG에 사용할 노트만 별도로 선택합니다.
-login은 저장된 Graph 로그인을 확인하고, 필요하면 기기 로그인을 시작합니다.
+login은 Graph 인증 상태를 확인하고, 필요하면 기기 로그인을 시작합니다.
 '@ | Write-Host
 }
 

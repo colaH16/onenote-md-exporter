@@ -119,7 +119,7 @@ function Connect-OneNoteGraph {
         throw "Microsoft.Graph.Authentication 모듈을 불러오지 못했습니다. 먼저 ./scripts/setup.fish를 실행하세요.`n$($_.Exception.Message)"
     }
 
-    Write-Host '[auth 2/3] 저장된 로그인 컨텍스트를 확인합니다.'
+    Write-Host '[auth 2/3] 사용 가능한 로그인 컨텍스트를 확인합니다.'
     $context = Get-MgContext -ErrorAction SilentlyContinue
     if ($null -ne $context -and $context.Account -and @($context.Scopes) -contains 'Notes.Read') {
         Write-Host "[auth 3/3] 저장된 Microsoft Graph 로그인 사용: $($context.Account)"
@@ -135,7 +135,19 @@ function Connect-OneNoteGraph {
         -NoWelcome
     $connectedContext = Get-MgContext -ErrorAction SilentlyContinue
     if ($null -eq $connectedContext -or -not $connectedContext.Account) {
-        throw 'Microsoft Graph 로그인 컨텍스트를 확인하지 못했습니다.'
+        Write-Warning 'CurrentUser 로그인 컨텍스트가 생성되지 않아 Process 방식으로 다시 시도합니다.'
+        Disconnect-MgGraph -ErrorAction SilentlyContinue | Out-Null
+        Connect-MgGraph `
+            -TenantId consumers `
+            -Scopes 'Notes.Read' `
+            -UseDeviceCode `
+            -ContextScope Process `
+            -NoWelcome
+        $connectedContext = Get-MgContext -ErrorAction SilentlyContinue
+        if ($null -eq $connectedContext -or -not $connectedContext.Account) {
+            throw 'CurrentUser와 Process 방식 모두에서 Microsoft Graph 로그인 컨텍스트를 확인하지 못했습니다.'
+        }
+        Write-Warning '이 로그인은 현재 pwsh 실행에서만 유효합니다. export나 repair를 실행한 명령 안에서는 끝까지 유지됩니다.'
     }
     Write-Host "Microsoft Graph 로그인 완료: $($connectedContext.Account)"
 }
