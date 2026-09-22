@@ -183,6 +183,9 @@ Markdown 변환은 Graph API나 PowerShell을 사용하지 않으며 macOS·Linu
 - 섹션 그룹·섹션·하위 페이지를 실제 폴더 계층으로 생성합니다.
 - `--`로 시작한 이름은 `_old/`로 이동하고 `status: old`, `rag_priority: fallback`을 기록합니다.
 - OneNote에서 코드 블록 대신 사용한 1×1 표는 fenced code block으로 변환합니다.
+- 문단 하나인 명확한 셸 명령은 인라인 코드로, 연속 명령·heredoc·`\\` 연속행·셸 반복문은
+  `bash` 또는 `fish` fenced code block으로 변환합니다. heredoc 안의 `#` 주석은 Markdown 제목이 되지 않습니다.
+- 여러 열 표의 명령은 표 구조와 가로 비교를 보존하기 위해 자동 코드 변환에서 제외합니다.
 - 이미지와 첨부파일은 페이지 옆 `.assets/`에 복사하고 상대 링크로 연결합니다.
 - OneNote 페이지·섹션 링크는 GUID를 대조해 SilverBullet 내부 페이지 링크로 바꿉니다.
 - `dnf.conf`, `config.yaml`, `5.2`처럼 확장자로 오인되는 페이지명은 제목은 보존하고 파일명만 `dnf-conf`, `config-yaml`, `5-2` 형태로 바꿉니다.
@@ -213,6 +216,10 @@ Markdown 변환은 Graph API나 PowerShell을 사용하지 않으며 macOS·Linu
 변환 결과와 미해결 링크는 `_meta/internal-link-report.md`와
 `_meta/internal-link-report.json`에 기록됩니다. 잘못된 override 경로나 출력 밖을
 가리키는 경로는 조용히 무시하지 않고 변환을 중단합니다.
+
+명령과 설명이 한 문단에 섞였거나 heredoc 종료를 확정할 수 없는 경우 원문을 임의로
+바꾸지 않습니다. 확인할 후보는 `_meta/shell-review.md`와
+`_meta/shell-review.json`에 기록됩니다.
 
 macOS에서 받은 아카이브를 Linux에서 변환할 때는 `output/`과 함께 다음 로컬 설정을 옮깁니다.
 

@@ -85,6 +85,41 @@ LEGACY_ONENOTE_ID = r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
 IMAGE_EXTENSIONS = {"avif", "bmp", "gif", "heic", "heif", "jpeg", "jpg", "png", "svg", "tif", "tiff", "webp"}
 VIDEO_EXTENSIONS = {"avi", "m4v", "mkv", "mov", "mp4", "mpeg", "mpg", "webm"}
 AUDIO_EXTENSIONS = {"aac", "flac", "m4a", "mp3", "ogg", "opus", "wav", "wma"}
+HEREDOC_START = re.compile(
+    r"^(?:#\s*)?(?:sudo\s+)?(?:cat|tee)\b.*?<<-?\s*['\"]?([A-Za-z_][A-Za-z0-9_]*)['\"]?\s*$",
+    re.IGNORECASE,
+)
+SHELL_COMMANDS_WITH_SUBCOMMANDS: dict[str, set[str]] = {
+    "apt": {"autoclean", "autoremove", "clean", "download", "full-upgrade", "install", "list", "purge", "remove", "search", "show", "update", "upgrade"},
+    "apt-get": {"autoclean", "autoremove", "clean", "download", "install", "purge", "remove", "update", "upgrade"},
+    "dnf": {"check-update", "clean", "config-manager", "download", "group", "groupinstall", "info", "install", "list", "makecache", "provides", "reinstall", "remove", "repoquery", "search", "update", "upgrade", "whatprovides"},
+    "yum": {"check-update", "clean", "config-manager", "group", "groupinstall", "info", "install", "list", "localinstall", "makecache", "provides", "reinstall", "remove", "search", "update", "upgrade", "whatprovides"},
+    "zypper": {"addrepo", "ar", "clean", "dist-upgrade", "download", "dup", "in", "info", "install", "list-updates", "lr", "modifyrepo", "mr", "patch", "ref", "refresh", "remove", "repos", "rm", "se", "search", "up", "update"},
+    "systemctl": {"cat", "daemon-reexec", "daemon-reload", "disable", "edit", "enable", "is-active", "is-enabled", "list-timers", "mask", "reload", "restart", "show", "start", "status", "stop", "unmask"},
+    "kubectl": {"annotate", "api-resources", "apply", "auth", "autoscale", "cluster-info", "config", "cordon", "cp", "create", "delete", "describe", "diff", "drain", "edit", "exec", "explain", "get", "label", "logs", "patch", "port-forward", "replace", "rollout", "run", "scale", "taint", "top", "uncordon", "wait"},
+    "helm": {"create", "dependency", "get", "history", "install", "lint", "list", "package", "plugin", "pull", "repo", "rollback", "search", "show", "status", "template", "test", "uninstall", "upgrade", "verify", "version"},
+    "docker": {"attach", "build", "commit", "compose", "container", "cp", "create", "exec", "image", "images", "info", "inspect", "kill", "load", "login", "logout", "logs", "network", "node", "pause", "port", "ps", "pull", "push", "restart", "rm", "rmi", "run", "save", "service", "stack", "start", "stats", "stop", "swarm", "system", "tag", "top", "unpause", "update", "version", "volume"},
+    "podman": {"build", "commit", "compose", "container", "cp", "create", "exec", "generate", "image", "images", "info", "inspect", "kill", "load", "login", "logs", "network", "pause", "pod", "port", "ps", "pull", "push", "restart", "rm", "rmi", "run", "save", "start", "stats", "stop", "system", "tag", "top", "unpause", "version", "volume"},
+    "git": {"add", "branch", "checkout", "cherry-pick", "clean", "clone", "commit", "config", "diff", "fetch", "init", "log", "merge", "mv", "pull", "push", "rebase", "remote", "reset", "restore", "revert", "show", "stash", "status", "switch", "tag"},
+    "ip": {"addr", "address", "link", "neigh", "netns", "route", "rule", "tunnel"},
+}
+SHELL_COMMANDS_WITH_ARGUMENTS = {
+    "abbr", "alias", "awk", "base64", "blkid", "btrfs", "buildah", "cat", "cd", "ceph",
+    "cephadm", "chattr", "chmod", "chown", "chroot", "chsh", "cp", "crictl", "ctr", "curl",
+    "cut", "date", "dd", "df", "dkms", "dracut", "du", "echo", "efibootmgr", "export",
+    "exportfs", "fdisk", "find", "firewall-cmd", "fish_add_path", "free", "fuser", "gluster",
+    "grep", "grub2-mkconfig", "grub-mkconfig", "grubby", "head", "hostnamectl", "ip6tables",
+    "iptables", "journalctl", "jq", "k3s", "kill", "killall", "ln", "loginctl", "losetup", "ls",
+    "lsblk", "lsmod", "lvs", "lvcreate", "lvdisplay", "lvextend", "lvreduce", "make", "mdadm",
+    "mkdir", "mkfs", "mkfs.btrfs", "mkfs.ext4", "mkfs.xfs", "mkinitrd", "modprobe", "mount",
+    "mv", "nano", "nerdctl", "netstat", "nft", "nmcli", "oc", "openssl", "parted", "podman",
+    "printf", "ps", "pv", "pvcreate", "pvdisplay", "pveceph", "rbd", "rke2", "rm", "rpm",
+    "rsync", "sed", "skopeo", "smartctl", "smbpasswd", "snapper", "sort", "ss", "ssh", "swapon",
+    "swapoff", "sysctl", "systemd-firstboot", "tail", "tar", "tee", "timedatectl", "touch", "tr",
+    "udevadm", "umount", "update-alternatives", "update-bootloader", "update-grub", "vgcreate",
+    "vgdisplay", "vi", "vim", "virsh", "watch", "wget", "wipefs", "xargs", "yq", "zfs", "zpool",
+}
+SHELL_PROSE_MARKERS = (" 또는 ", " -> ", " = ", " 하면 ", " 위해 ", " 확인 ", " 변경 ")
 
 
 @dataclass
@@ -324,10 +359,78 @@ def silverbullet_page_ref(source: Path, target: Path, space_root: str = "") -> s
     return silverbullet_relative_ref(source, target_page)
 
 
-def fenced_text(value: str) -> str:
+def fenced_code(value: str, language: str = "text") -> str:
     longest = max((len(match.group(0)) for match in re.finditer(r"`+", value)), default=0)
     fence = "`" * max(3, longest + 1)
-    return f"{fence}text\n{value or '(빈 블록)'}\n{fence}"
+    return f"{fence}{language}\n{value or '(빈 블록)'}\n{fence}"
+
+
+def fenced_text(value: str) -> str:
+    return fenced_code(value, "text")
+
+
+def inline_code(value: str) -> str:
+    value = value.strip()
+    longest = max((len(match.group(0)) for match in re.finditer(r"`+", value)), default=0)
+    fence = "`" * max(1, longest + 1)
+    padding = " " if "`" in value else ""
+    return f"{fence}{padding}{value}{padding}{fence}"
+
+
+def shell_prompt_body(value: str) -> str:
+    return re.sub(r"^(?:(?:\$|#)\s+|#(?=sudo\b))", "", value.strip(), count=1)
+
+
+def obvious_shell_command(value: str) -> bool:
+    """Recognize command-only lines while rejecting headings and explanatory prose."""
+    had_prompt = bool(re.match(r"^(?:(?:\$|#)\s+|#(?=sudo\b))", value.strip()))
+    line = shell_prompt_body(value)
+    if not line or line.startswith("#"):
+        return False
+    if line.startswith("#!"):
+        return True
+    if re.match(r"^echo\s+(['\"]).*\1(?:\s+#.*)?$", line) and not line.rstrip().endswith(";"):
+        return True
+    command_part = re.split(r"\s+#", line, maxsplit=1)[0]
+    if any(marker in f" {command_part} " for marker in SHELL_PROSE_MARKERS):
+        return False
+    if re.match(r"^sudo\s+\S+", command_part):
+        return True
+    if re.match(r"^(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*=(?:['\"/$~]|[^\s]+$)", command_part):
+        return True
+    if re.match(r"^set\s+-[A-Za-z]+(?:\s+\S+)+", command_part):
+        return True
+    match = re.match(r"^([A-Za-z][A-Za-z0-9_.+-]*)(?:\s+([^\s]+))?(?:\s+.*)?$", command_part)
+    if not match:
+        return False
+    command = match.group(1).lower()
+    argument = (match.group(2) or "").lower()
+    if command in SHELL_COMMANDS_WITH_SUBCOMMANDS:
+        recognized = argument in SHELL_COMMANDS_WITH_SUBCOMMANDS[command] or argument.startswith("-")
+        syntactic = bool(re.search(r"(?:^|\s)--?\w|[/~$|<>]", command_part))
+        return recognized and (had_prompt or syntactic or len(command_part.split()) >= 3)
+    if command not in SHELL_COMMANDS_WITH_ARGUMENTS:
+        return False
+    if not argument:
+        return had_prompt
+    if command == "echo" and not had_prompt and command_part.rstrip().endswith(";"):
+        return False
+    # File-oriented commands without flags need a path, extension, expansion, or extra argument.
+    return bool(
+        argument.startswith("-")
+        or re.search(r"[/.$~*?=:]", argument)
+        or len(command_part.split()) >= 3
+    )
+
+
+def shell_language(values: Iterable[str]) -> str:
+    combined = "\n".join(shell_prompt_body(value) for value in values)
+    if re.search(
+        r"(?m)^\s*(?:set\s+-[A-Za-z]+|function\s+|for\s+\S+\s+in\s+|while\s+|end\s*$|fish_add_path\s+|abbr\s+)",
+        combined,
+    ):
+        return "fish"
+    return "bash"
 
 
 class MarkdownRenderer:
@@ -335,6 +438,11 @@ class MarkdownRenderer:
         self.asset_prefix = asset_prefix.rstrip("/")
         self.review_id_prefix = review_id_prefix
         self.layout_reviews: list[dict[str, object]] = []
+        self.shell_reviews: list[dict[str, str]] = []
+        self.shell_code_blocks = 0
+        self.inline_shell_commands = 0
+        self._table_depth = 0
+        self._shell_review_keys: set[tuple[str, str]] = set()
 
     def rewrite_url(self, value: str) -> str:
         value = html.unescape(value.strip())
@@ -446,15 +554,19 @@ class MarkdownRenderer:
                     return f"```\n{value}\n```\n\n"
 
         rows: list[list[str]] = []
-        for row in row_nodes:
-            cells = [child for child in row.child_nodes() if child.tag in {"th", "td"}]
-            if not cells:
-                continue
-            rendered = []
-            for cell in cells:
-                value = normalize_markdown(self.render_children(cell)).replace("\n", "<br>")
-                rendered.append(value.replace("|", "\\|"))
-            rows.append(rendered)
+        self._table_depth += 1
+        try:
+            for row in row_nodes:
+                cells = [child for child in row.child_nodes() if child.tag in {"th", "td"}]
+                if not cells:
+                    continue
+                rendered = []
+                for cell in cells:
+                    value = normalize_markdown(self.render_children(cell)).replace("\n", "<br>")
+                    rendered.append(value.replace("|", "\\|"))
+                rows.append(rendered)
+        finally:
+            self._table_depth -= 1
         if not rows:
             return ""
         width = max(len(row) for row in rows)
@@ -492,15 +604,236 @@ class MarkdownRenderer:
             item_index += 1
         return "\n".join(lines) + "\n\n"
 
+    @staticmethod
+    def _paragraph_line(node: HtmlNode | str) -> str | None:
+        if not isinstance(node, HtmlNode) or node.tag != "p":
+            return None
+        return node_literal_text(node).strip()
+
+    @staticmethod
+    def _has_internal_link(node: HtmlNode | str) -> bool:
+        return isinstance(node, HtmlNode) and any(
+            is_onenote_internal_url(link.attrs.get("href", ""))
+            for link in node.descendants("a")
+        )
+
+    def _range_has_internal_link(
+        self,
+        children: list[HtmlNode | str],
+        start: int,
+        end: int,
+    ) -> bool:
+        return any(self._has_internal_link(child) for child in children[start:end + 1])
+
+    def _shell_review(self, reason: str, value: str) -> None:
+        key = (reason, value)
+        if key in self._shell_review_keys:
+            return
+        self._shell_review_keys.add(key)
+        self.shell_reviews.append({"reason": reason, "text": value})
+
+    @staticmethod
+    def _ambiguous_shell_candidate(value: str) -> bool:
+        had_prompt = bool(re.match(r"^(?:(?:\$|#)\s+|#(?=sudo\b))", value.strip()))
+        line = shell_prompt_body(value)
+        match = re.match(r"^([A-Za-z][A-Za-z0-9_.+-]*)(?:\s+([^\s]+))?", line)
+        if not match:
+            return False
+        command = match.group(1).lower()
+        argument = (match.group(2) or "").lower()
+        known = command in SHELL_COMMANDS_WITH_SUBCOMMANDS or command in SHELL_COMMANDS_WITH_ARGUMENTS
+        if not known or not argument:
+            return False
+        if command in SHELL_COMMANDS_WITH_SUBCOMMANDS:
+            recognized = argument in SHELL_COMMANDS_WITH_SUBCOMMANDS[command] or argument.startswith("-")
+            if not recognized:
+                return False
+        if command == "echo" and not had_prompt and line.rstrip().endswith(";"):
+            return False
+        if argument == "=":
+            return False
+        has_syntax = bool(re.search(r"(?:^|\s)(?:--?\w|[/~$][^\s]*|[^\s]+\.[A-Za-z0-9]+)|[|<>]", line))
+        has_prose = any(marker in f" {line} " for marker in SHELL_PROSE_MARKERS) or "또는" in line
+        return has_syntax and has_prose
+
+    @staticmethod
+    def _heredoc_terminator(value: str, delimiter: str) -> tuple[str, bool]:
+        if value == delimiter:
+            return "", True
+        embedded = re.match(rf"^(.*?)(?:\uFFFC)+{re.escape(delimiter)}$", value)
+        return (embedded.group(1).rstrip(), True) if embedded else (value, False)
+
+    def _heredoc_end(self, children: list[HtmlNode | str], start: int, delimiter: str) -> int | None:
+        for index in range(start + 1, len(children)):
+            child = children[index]
+            if isinstance(child, str):
+                if child.strip():
+                    return None
+                continue
+            if child.tag == "br":
+                continue
+            line = self._paragraph_line(child)
+            if line is None:
+                return None
+            _, terminated = self._heredoc_terminator(line, delimiter)
+            if terminated:
+                return index
+        return None
+
+    def _shell_structure_end(
+        self,
+        children: list[HtmlNode | str],
+        start: int,
+        value: str,
+    ) -> tuple[int, str] | None:
+        opening = re.sub(r"^#\s*", "", value.strip())
+        if not re.match(r"^(?:for\s+[A-Za-z_][A-Za-z0-9_]*\s+in\s+|while\s+)", opening):
+            return None
+        saw_do = bool(re.search(r";\s*do\s*$", opening))
+        for index in range(start + 1, len(children)):
+            child = children[index]
+            if isinstance(child, str):
+                if child.strip():
+                    return None
+                continue
+            if child.tag == "br":
+                continue
+            line = self._paragraph_line(child)
+            if line is None:
+                return None
+            token = line.strip()
+            if token == "do":
+                saw_do = True
+            elif token == "done" and saw_do:
+                return index, "bash"
+            elif token == "end" and not saw_do:
+                return index, "fish"
+        return None
+
+    @staticmethod
+    def _literal_range_lines(children: list[HtmlNode | str], start: int, end: int) -> list[str]:
+        lines: list[str] = []
+        for child in children[start:end + 1]:
+            if isinstance(child, str):
+                continue
+            if child.tag == "br":
+                if lines and lines[-1] != "":
+                    lines.append("")
+                continue
+            lines.extend(node_literal_text(child).rstrip().splitlines() or [""])
+        while lines and not lines[-1]:
+            lines.pop()
+        return lines
+
+    def _heredoc_lines(
+        self,
+        children: list[HtmlNode | str],
+        start: int,
+        end: int,
+        delimiter: str,
+    ) -> list[str]:
+        lines: list[str] = []
+        for child in children[start:end + 1]:
+            if isinstance(child, str):
+                continue
+            if child.tag == "br":
+                if lines and lines[-1] != "":
+                    lines.append("")
+                continue
+            line = node_literal_text(child).rstrip()
+            if child is children[end]:
+                content, terminated = self._heredoc_terminator(line, delimiter)
+                if terminated:
+                    if content:
+                        lines.extend(content.splitlines())
+                    lines.append(delimiter)
+                    continue
+            lines.extend(line.splitlines() or [""])
+        while lines and not lines[-1]:
+            lines.pop()
+        return lines
+
+    @staticmethod
+    def _next_significant(children: list[HtmlNode | str], start: int) -> int:
+        index = start
+        while index < len(children):
+            child = children[index]
+            if not (isinstance(child, str) and not child.strip()):
+                break
+            index += 1
+        return index
+
     def render_children(self, node: HtmlNode) -> str:
         parts: list[str] = []
-        for child in node.children:
+        children = node.children
+        index = 0
+        while index < len(children):
+            child = children[index]
             if isinstance(child, str) and not child.strip() and any(character in child for character in "\r\n\t"):
+                index += 1
                 continue
+
+            line = self._paragraph_line(child) if self._table_depth == 0 else None
+            if (
+                line
+                and isinstance(child, HtmlNode)
+                and (
+                    self._has_internal_link(child)
+                    or self._max_font_size(child) >= 15
+                )
+            ):
+                line = None
+            heredoc = HEREDOC_START.match(line) if line else None
+            if heredoc:
+                end = self._heredoc_end(children, index, heredoc.group(1))
+                if end is not None:
+                    if not self._range_has_internal_link(children, index, end):
+                        values = self._heredoc_lines(children, index, end, heredoc.group(1))
+                        parts.append(fenced_code("\n".join(values), "bash") + "\n\n")
+                        self.shell_code_blocks += 1
+                        index = end + 1
+                        continue
+                else:
+                    self._shell_review("heredoc 시작은 있지만 종료 표식을 찾지 못함", line)
+
+            structure = self._shell_structure_end(children, index, line) if line else None
+            if structure and not self._range_has_internal_link(children, index, structure[0]):
+                end, language = structure
+                values = self._literal_range_lines(children, index, end)
+                parts.append(fenced_code("\n".join(values), language) + "\n\n")
+                self.shell_code_blocks += 1
+                index = end + 1
+                continue
+
+            if line and obvious_shell_command(line):
+                command_lines = [line]
+                cursor = self._next_significant(children, index + 1)
+                while cursor < len(children):
+                    if self._has_internal_link(children[cursor]):
+                        break
+                    next_line = self._paragraph_line(children[cursor])
+                    continuation = command_lines[-1].rstrip().endswith("\\")
+                    if not next_line or (not continuation and not obvious_shell_command(next_line)):
+                        break
+                    command_lines.append(next_line)
+                    cursor = self._next_significant(children, cursor + 1)
+                if len(command_lines) == 1:
+                    parts.append(inline_code(line) + "\n\n")
+                    self.inline_shell_commands += 1
+                else:
+                    parts.append(fenced_code("\n".join(command_lines), shell_language(command_lines)) + "\n\n")
+                    self.shell_code_blocks += 1
+                index = cursor
+                continue
+
+            if line and self._ambiguous_shell_candidate(line):
+                self._shell_review("명령과 설명이 한 문단에 섞여 있어 자동 변환하지 않음", line)
+
             if isinstance(child, HtmlNode) and child.tag in BLOCK_TAGS:
                 parts.append(self.render_block(child))
             else:
                 parts.append(self.render_inline(child))
+            index += 1
         return "".join(parts)
 
     def render_block(self, node: HtmlNode | str) -> str:
@@ -759,6 +1092,7 @@ class Converter:
         self.warnings: list[str] = []
         self.mapping: list[dict[str, object]] = []
         self.layout_reviews: list[dict[str, object]] = []
+        self.shell_reviews: list[dict[str, object]] = []
         self.stats: dict[str, int] = {
             "notebooks": 0,
             "sections": 0,
@@ -778,6 +1112,9 @@ class Converter:
             "internalSectionLinks": 0,
             "internalLinkOverrides": 0,
             "unresolvedInternalLinks": 0,
+            "shellCodeBlocks": 0,
+            "inlineShellCommands": 0,
+            "shellReviewCandidates": 0,
         }
         self.document_extensions: Counter[str] = Counter()
         self.tag_counts: Counter[str] = Counter()
@@ -1218,6 +1555,8 @@ class Converter:
         self.stats["assets"] += assets
         self.stats["assetBytes"] += asset_bytes
         self.stats["layoutNotes"] += layout_note_count
+        self.stats["shellCodeBlocks"] += renderer.shell_code_blocks
+        self.stats["inlineShellCommands"] += renderer.inline_shell_commands
         if old:
             self.stats["oldPages"] += 1
         if needs_visual_review:
@@ -1262,6 +1601,19 @@ class Converter:
                 "candidateTarget": review["candidateTarget"],
                 "annotation": review["annotation"],
             })
+        for review in renderer.shell_reviews:
+            self.shell_reviews.append({
+                "status": "pending",
+                "pageId": page.page_id,
+                "notebookId": notebook_id,
+                "notebook": notebook_name,
+                "section": section_name,
+                "title": page.title,
+                "markdown": relative_markdown.as_posix(),
+                "reason": review["reason"],
+                "text": review["text"],
+            })
+        self.stats["shellReviewCandidates"] += len(renderer.shell_reviews)
 
         for child in page.children:
             self.write_page(
@@ -1538,6 +1890,44 @@ class Converter:
             ])
         (meta_dir / "layout-review.md").write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
 
+    def write_shell_review_reports(self, meta_dir: Path) -> None:
+        payload = {
+            "schemaVersion": 1,
+            "generatedAt": datetime.now(timezone.utc).isoformat(),
+            "count": len(self.shell_reviews),
+            "reviews": self.shell_reviews,
+        }
+        (meta_dir / "shell-review.json").write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+        lines = [
+            front_matter([
+                ("title", "OneNote 셸 명령 수동 검토 목록"),
+                ("tags", "meta/onenote/review source/onenote code/review"),
+                ("type", "onenote-shell-review"),
+                ("generated", True),
+            ]),
+            "# OneNote 셸 명령 수동 검토 목록",
+            "",
+            f"명령과 설명의 경계가 모호해 원문 형태로 둔 {len(self.shell_reviews)}건입니다.",
+            "여러 열 표 안의 내용은 표 구조를 보존하기 위해 이 목록에도 넣지 않습니다.",
+            "",
+        ]
+        for number, review in enumerate(self.shell_reviews, start=1):
+            page_link = "../" + str(review["markdown"])
+            lines.extend([
+                f"## {number}. [{review['title']}]({markdown_uri(page_link)})",
+                "",
+                f"- 사유: {review['reason']}",
+                f"- 노트북 / 섹션: `{review['notebook']}` / `{review['section']}`",
+                "",
+                fenced_text(str(review["text"])),
+                "",
+            ])
+        if not self.shell_reviews:
+            lines.append("수동으로 판단할 후보가 없습니다.")
+        (meta_dir / "shell-review.md").write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+
     def write_document_picker_guide(self, meta_dir: Path) -> None:
         lines = [
             front_matter([
@@ -1664,6 +2054,7 @@ class Converter:
             )
             self.write_internal_link_report(meta_dir)
             self.write_layout_review_reports(meta_dir)
+            self.write_shell_review_reports(meta_dir)
             self.write_document_picker_guide(meta_dir)
             self.write_tag_guide(meta_dir)
             report = {
@@ -1729,6 +2120,12 @@ def main(argv: list[str] | None = None) -> int:
         "- internal OneNote links: "
         f"{converter.stats['internalLinksRewritten']}/{converter.stats['internalLinksFound']} rewritten, "
         f"{converter.stats['unresolvedInternalLinks']} unresolved"
+    )
+    print(
+        "- shell code: "
+        f"{converter.stats['shellCodeBlocks']} blocks, "
+        f"{converter.stats['inlineShellCommands']} inline, "
+        f"{converter.stats['shellReviewCandidates']} review candidates"
     )
     print(f"- assets: {converter.stats['assets']} ({converter.stats['assetBytes']} bytes)")
     print(f"- warnings: {len(converter.warnings)}")

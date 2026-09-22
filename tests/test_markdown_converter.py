@@ -42,6 +42,123 @@ class MarkdownRendererTests(unittest.TestCase):
         self.assertNotIn("\n ```", markdown)
         self.assertNotIn("| --- |", markdown)
 
+    def test_heredoc_paragraphs_become_one_bash_block(self) -> None:
+        source = """
+        <html><body><div>
+          <p># sudo tee -a /mnt/zfs/etc/dnf/dnf.conf &lt;&lt; 'EOF'</p>
+          <br />
+          <p>sudo tee -a /etc/dnf/dnf.conf &lt;&lt; 'EOF'</p>
+          <p>installonly_limit=5</p>
+          <p># 저장할 kernel 갯수</p>
+          <p>EOF</p>
+        </div></body></html>
+        """
+        renderer = MarkdownRenderer("Page.assets")
+        markdown, _ = renderer.render_document(source)
+        self.assertIn("```bash\n# sudo tee -a /mnt/zfs/etc/dnf/dnf.conf << 'EOF'", markdown)
+        self.assertIn("\n# 저장할 kernel 갯수\nEOF\n```", markdown)
+        self.assertNotIn("\n# 저장할 kernel 갯수\n\n", markdown)
+        self.assertEqual(1, renderer.shell_code_blocks)
+
+    def test_heredoc_object_marker_before_terminator_is_split(self) -> None:
+        source = """
+        <html><body><div>
+          <p>tee /etc/sysctl.d/example.conf &lt;&lt; 'EOF'</p>
+          <p>kernel.panic = 10</p>
+          <p>kernel.panic_on_oops = 1￼EOF</p>
+        </div></body></html>
+        """
+        markdown, _ = MarkdownRenderer("Page.assets").render_document(source)
+        self.assertIn("kernel.panic_on_oops = 1\nEOF\n```", markdown)
+        self.assertNotIn("￼", markdown)
+
+    def test_single_command_is_inline_and_adjacent_commands_are_fenced(self) -> None:
+        single, _ = MarkdownRenderer("Page.assets").render_document(
+            "<html><body><div><p>sudo dnf install jq</p></div></body></html>"
+        )
+        self.assertEqual("`sudo dnf install jq`", single)
+
+        renderer = MarkdownRenderer("Page.assets")
+        multiple, _ = renderer.render_document(
+            "<html><body><div><p>kubectl get pods</p><p>kubectl get svc</p></div></body></html>"
+        )
+        self.assertEqual("```bash\nkubectl get pods\nkubectl get svc\n```", multiple)
+        self.assertEqual(1, renderer.shell_code_blocks)
+
+    def test_backslash_continuation_becomes_one_bash_block(self) -> None:
+        source = """
+        <html><body><div>
+          <p>sudo dnf remove docker \\</p>
+          <p>docker-client \\</p>
+          <p>docker-common</p>
+        </div></body></html>
+        """
+        markdown, _ = MarkdownRenderer("Page.assets").render_document(source)
+        self.assertEqual(
+            "```bash\nsudo dnf remove docker \\\ndocker-client \\\ndocker-common\n```",
+            markdown,
+        )
+
+    def test_bash_for_loop_becomes_one_code_block(self) -> None:
+        source = """
+        <html><body><div>
+          <p>for port in 53 443</p><p>do</p>
+          <p>firewall-cmd --add-port=$port/tcp</p><p>done</p>
+        </div></body></html>
+        """
+        markdown, _ = MarkdownRenderer("Page.assets").render_document(source)
+        self.assertEqual(
+            "```bash\nfor port in 53 443\ndo\nfirewall-cmd --add-port=$port/tcp\ndone\n```",
+            markdown,
+        )
+
+    def test_bare_root_prompt_command_is_not_a_markdown_heading(self) -> None:
+        markdown, _ = MarkdownRenderer("Page.assets").render_document(
+            "<html><body><div><p># journalctl</p></div></body></html>"
+        )
+        self.assertEqual("`# journalctl`", markdown)
+
+    def test_external_command_url_can_be_code_but_onenote_page_link_stays_a_link(self) -> None:
+        external, _ = MarkdownRenderer("Page.assets").render_document(
+            '<html><body><div><p>sudo dnf install '
+            '<a href="https://example.com/package.rpm">https://example.com/package.rpm</a>'
+            '</p></div></body></html>'
+        )
+        self.assertEqual("`sudo dnf install https://example.com/package.rpm`", external)
+
+        internal, _ = MarkdownRenderer("Page.assets").render_document(
+            '<html><body><div><p><a href="onenote:#dnf%20update&amp;page-id='
+            '%7B22222222-2222-2222-2222-222222222222%7D">dnf update</a></p></div></body></html>'
+        )
+        self.assertIn("[dnf update](onenote:", internal)
+        self.assertNotIn("`dnf update`", internal)
+
+        adjacent, _ = MarkdownRenderer("Page.assets").render_document(
+            '<html><body><div><p>sudo dnf update</p><p><a href="onenote:#dnf%20update&amp;page-id='
+            '%7B22222222-2222-2222-2222-222222222222%7D">dnf update</a></p></div></body></html>'
+        )
+        self.assertIn("`sudo dnf update`", adjacent)
+        self.assertIn("[dnf update](onenote:", adjacent)
+
+    def test_explicit_fish_commands_use_fish_fence(self) -> None:
+        renderer = MarkdownRenderer("Page.assets")
+        markdown, _ = renderer.render_document(
+            "<html><body><div><p>set -gx EDITOR nvim</p><p>set -gx PAGER less</p></div></body></html>"
+        )
+        self.assertEqual("```fish\nset -gx EDITOR nvim\nset -gx PAGER less\n```", markdown)
+
+    def test_multi_cell_table_preserves_plain_cell_content(self) -> None:
+        source = """
+        <html><body><div><table><tr>
+          <td><p>sudo dnf install jq</p></td><td><p>설명</p></td>
+        </tr></table></div></body></html>
+        """
+        renderer = MarkdownRenderer("Page.assets")
+        markdown, _ = renderer.render_document(source)
+        self.assertIn("| sudo dnf install jq | 설명 |", markdown)
+        self.assertNotIn("`sudo dnf install jq`", markdown)
+        self.assertEqual(0, renderer.inline_shell_commands)
+
     def test_file_uri_is_not_treated_as_a_relative_asset(self) -> None:
         renderer = MarkdownRenderer("Page.assets")
         self.assertTrue(renderer.rewrite_url(r"file:///\\server\share").startswith("file:///"))
