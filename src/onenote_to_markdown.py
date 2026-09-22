@@ -75,6 +75,7 @@ MONOSPACE_FONTS = ("consolas", "courier", "menlo", "monaco", "monospace", "d2cod
 INVALID_PATH_CHARS = re.compile(r'[\x00-\x1f<>:"/\\|?*]')
 ARCHIVE_ID_SUFFIX = re.compile(r"--[0-9a-f]{8}$", re.IGNORECASE)
 OLD_PREFIX = re.compile(r"^--+")
+PAGE_NAME_EXTENSION = re.compile(r"\.([A-Za-z0-9]+)$")
 ONENOTE_RESOURCE_URL = re.compile(
     r'https://graph\.microsoft\.com/[^"\s<>]*/onenote/resources/([^/?#"\s<>]+)/\$value',
     re.IGNORECASE,
@@ -245,6 +246,12 @@ def is_old_name(value: str) -> bool:
 def current_name(value: str, fallback: str = "untitled") -> str:
     stripped = OLD_PREFIX.sub("", value.strip()).strip(" -")
     return safe_name(stripped, fallback=fallback)
+
+
+def current_page_name(value: str, fallback: str = "untitled") -> str:
+    """Avoid leaf page names that SilverBullet interprets as documents by extension."""
+    name = current_name(value, fallback=fallback)
+    return PAGE_NAME_EXTENSION.sub(r"-\1", name)
 
 
 def archive_display_name(value: str) -> str:
@@ -1092,7 +1099,7 @@ class Converter:
             base_parent = output_parent / "_old"
             relative_base = relative_parent / "_old"
         base_parent.mkdir(parents=True, exist_ok=True)
-        desired = current_name(page.title, fallback=f"untitled-{stable_short(page.page_id)}")
+        desired = current_page_name(page.title, fallback=f"untitled-{stable_short(page.page_id)}")
         name = self.allocator.allocate(base_parent, desired, page.page_id)
         if page.children:
             page_container = base_parent / name

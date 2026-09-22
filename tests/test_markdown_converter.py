@@ -13,6 +13,7 @@ from onenote_to_markdown import (  # noqa: E402
     MarkdownRenderer,
     build_page_tree,
     current_name,
+    current_page_name,
     is_onenote_internal_url,
     is_old_name,
     onenote_link_ids,
@@ -115,6 +116,11 @@ class HierarchyTests(unittest.TestCase):
     def test_old_prefix_is_removed_but_status_is_detectable(self) -> None:
         self.assertTrue(is_old_name("---deprecated"))
         self.assertEqual("deprecated", current_name("---deprecated"))
+
+    def test_extension_like_page_title_is_made_safe_for_silverbullet(self) -> None:
+        self.assertEqual("dnf-conf", current_page_name("dnf.conf"))
+        self.assertEqual("0526 5-2", current_page_name("0526 5.2"))
+        self.assertEqual("ordinary page", current_page_name("ordinary page"))
 
     def test_tag_component_is_stable_and_picker_friendly(self) -> None:
         self.assertEqual("대학-노트-3-1", tag_component("대학 노트 3 - 1"))

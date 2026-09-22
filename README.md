@@ -185,6 +185,7 @@ Markdown 변환은 Graph API나 PowerShell을 사용하지 않으며 macOS·Linu
 - OneNote에서 코드 블록 대신 사용한 1×1 표는 fenced code block으로 변환합니다.
 - 이미지와 첨부파일은 페이지 옆 `.assets/`에 복사하고 상대 링크로 연결합니다.
 - OneNote 페이지·섹션 링크는 GUID를 대조해 SilverBullet 내부 페이지 링크로 바꿉니다.
+- `dnf.conf`, `config.yaml`, `5.2`처럼 확장자로 오인되는 페이지명은 제목은 보존하고 파일명만 `dnf-conf`, `config-yaml`, `5-2` 형태로 바꿉니다.
 - 결과와 OneNote ID 매핑은 `output/markdown/_meta/`에 기록합니다.
 - `markdown.json`의 `curationFile`이 가리키는 비공개 교정 규칙이 있으면, 자유 배치 박스를 검토 완료된 순서와 형식으로 다시 구성합니다.
 - 교정 규칙이 원문의 박스를 빠뜨리거나 존재하지 않는 좌표를 가리키면 변환을 중단합니다. 조용히 내용을 버리지 않습니다.
