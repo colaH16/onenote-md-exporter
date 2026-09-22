@@ -79,6 +79,8 @@ ONENOTE_RESOURCE_URL = re.compile(
     r'https://graph\.microsoft\.com/[^"\s<>]*/onenote/resources/([^/?#"\s<>]+)/\$value',
     re.IGNORECASE,
 )
+MARKDOWN_LINK = re.compile(r"(?<!!)\[(?P<label>[^\]]*)\]\((?P<url>[^)\n]+)\)")
+LEGACY_ONENOTE_ID = r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"
 IMAGE_EXTENSIONS = {"avif", "bmp", "gif", "heic", "heif", "jpeg", "jpg", "png", "svg", "tif", "tiff", "webp"}
 VIDEO_EXTENSIONS = {"avi", "m4v", "mkv", "mov", "mp4", "mpeg", "mpg", "webm"}
 AUDIO_EXTENSIONS = {"aac", "flac", "m4a", "mp3", "ogg", "opus", "wav", "wma"}
@@ -267,6 +269,52 @@ def review_excerpt(value: str, maximum: int = 1200) -> str:
 
 def unlocalized_onenote_resource_ids(value: str) -> set[str]:
     return {urllib.parse.unquote(match.group(1)) for match in ONENOTE_RESOURCE_URL.finditer(value)}
+
+
+def normalize_legacy_onenote_id(value: str) -> str:
+    return value.strip().strip("{}").lower()
+
+
+def onenote_link_ids(value: str) -> tuple[str | None, str | None]:
+    """Return the classic section/page GUIDs embedded in a OneNote link."""
+    decoded = urllib.parse.unquote(value).replace("§ion-id=", "section-id=")
+    section_match = re.search(rf"section-id=\{{?{LEGACY_ONENOTE_ID}\}}?", decoded, re.IGNORECASE)
+    page_match = re.search(rf"page-id=\{{?{LEGACY_ONENOTE_ID}\}}?", decoded, re.IGNORECASE)
+    if not page_match:
+        web_target = re.search(
+            rf"wd=target\([^|]*\|{LEGACY_ONENOTE_ID}/[^|]*\|{LEGACY_ONENOTE_ID}/",
+            decoded,
+            re.IGNORECASE,
+        )
+        if web_target:
+            if not section_match:
+                section_match = web_target
+            page_id = normalize_legacy_onenote_id(web_target.group(2))
+            section_id = normalize_legacy_onenote_id(web_target.group(1))
+            return section_id, page_id
+    section_id = normalize_legacy_onenote_id(section_match.group(1)) if section_match else None
+    page_id = normalize_legacy_onenote_id(page_match.group(1)) if page_match else None
+    return section_id, page_id
+
+
+def is_onenote_internal_url(value: str) -> bool:
+    decoded = urllib.parse.unquote(value).lower()
+    return "onenote:" in decoded or ("onedrive.live.com" in decoded and "wd=target" in decoded)
+
+
+def silverbullet_relative_ref(source: Path, target: Path) -> str:
+    """Build a SilverBullet page ref, relative to source and without .md."""
+    target_page = target.with_suffix("") if target.suffix.lower() == ".md" else target
+    relative = os.path.relpath(target_page, source.parent).replace(os.sep, "/")
+    return relative
+
+
+def silverbullet_page_ref(source: Path, target: Path, space_root: str = "") -> str:
+    """Build a page ref relative to a page, or absolute inside a configured SilverBullet root."""
+    target_page = target.with_suffix("") if target.suffix.lower() == ".md" else target
+    if space_root:
+        return "/" + "/".join((space_root.strip("/"), target_page.as_posix().lstrip("/")))
+    return silverbullet_relative_ref(source, target_page)
 
 
 def fenced_text(value: str) -> str:
@@ -661,9 +709,27 @@ class Converter:
         self.config_path = config_path
         self.replace = replace
         self.config = json.loads(config_path.read_text(encoding="utf-8"))
+        self.silverbullet_root = str(self.config.get("silverBulletRoot") or "").strip().strip("/")
+        if self.silverbullet_root and any(
+            part in {"", ".", ".."} for part in Path(self.silverbullet_root).parts
+        ):
+            raise RuntimeError(f"invalid silverBulletRoot: {self.silverbullet_root}")
         self.allowed = {str(item["id"]): str(item["name"]) for item in self.config.get("notebooks", [])}
         if not self.allowed:
             raise RuntimeError("markdown allowlist is empty")
+        override_payload = self.config.get("internalLinkOverrides", {})
+        if not isinstance(override_payload, dict):
+            raise RuntimeError("internalLinkOverrides must be an object keyed by classic OneNote GUID")
+        self.internal_link_overrides = {
+            normalize_legacy_onenote_id(str(link_id).removeprefix("page:")): Path(str(target))
+            for link_id, target in override_payload.items()
+            if not str(link_id).startswith("section:")
+        }
+        self.internal_section_link_overrides = {
+            normalize_legacy_onenote_id(str(link_id).removeprefix("section:")): Path(str(target))
+            for link_id, target in override_payload.items()
+            if str(link_id).startswith("section:")
+        }
         self.source_root = self._resolve_config_path(str(self.config.get("sourceArchiveRoot") or "./output/archive"))
         self.output_root = self._resolve_config_path(str(self.config.get("outputRoot") or "./output/markdown"))
         self.curation_path: Path | None = None
@@ -699,14 +765,32 @@ class Converter:
             "unlocalizedResources": 0,
             "assets": 0,
             "assetBytes": 0,
+            "internalLinksFound": 0,
+            "internalLinksRewritten": 0,
+            "internalPageLinks": 0,
+            "internalSectionLinks": 0,
+            "internalLinkOverrides": 0,
+            "unresolvedInternalLinks": 0,
         }
         self.document_extensions: Counter[str] = Counter()
         self.tag_counts: Counter[str] = Counter()
+        self.internal_link_report: list[dict[str, object]] = []
         self.staging_root: Path | None = None
 
     def _resolve_config_path(self, value: str) -> Path:
         path = Path(value).expanduser()
         return path.resolve() if path.is_absolute() else (self.project_root / path).resolve()
+
+    def _page_ref(self, source: Path, target: Path) -> str:
+        if source.is_absolute():
+            if self.staging_root is None:
+                raise RuntimeError("staging root is not initialized")
+            source = source.relative_to(self.staging_root)
+        if target.is_absolute():
+            if self.staging_root is None:
+                raise RuntimeError("staging root is not initialized")
+            target = target.relative_to(self.staging_root)
+        return silverbullet_page_ref(source, target, self.silverbullet_root)
 
     def discover_notebooks(self) -> list[tuple[Path, dict[str, object], str]]:
         discovered: dict[str, tuple[Path, dict[str, object]]] = {}
@@ -998,6 +1082,7 @@ class Converter:
         section_name: str,
         inherited_old: bool,
         relative_parent: Path,
+        section_markdown: Path,
     ) -> None:
         own_old = is_old_name(page.title)
         old = inherited_old or own_old
@@ -1137,11 +1222,18 @@ class Converter:
         if unlocalized_resources:
             self.stats["unlocalizedResourcePages"] += 1
             self.stats["unlocalizedResources"] += len(unlocalized_resources)
+        one_note_client_url = str(
+            ((page.metadata.get("links") or {}).get("oneNoteClientUrl") or {}).get("href") or ""
+        )
+        legacy_section_id, legacy_page_id = onenote_link_ids(one_note_client_url)
         self.mapping.append({
             "pageId": page.page_id,
+            "legacyPageId": legacy_page_id,
+            "legacySectionId": legacy_section_id,
             "notebookId": notebook_id,
             "source": str(page.source_dir.relative_to(self.source_root)),
             "markdown": relative_markdown.as_posix(),
+            "sectionMarkdown": section_markdown.as_posix(),
             "title": page.title,
             "status": "old" if old else "current",
             "ragPriority": "fallback" if old else "normal",
@@ -1173,6 +1265,7 @@ class Converter:
                 section_name,
                 old,
                 child_relative,
+                section_markdown,
             )
 
     def section_output_path(
@@ -1227,10 +1320,161 @@ class Converter:
             "",
         ]
         for label, target in links:
-            relative = os.path.relpath(target, path.parent).replace(os.sep, "/")
-            lines.append(f"- [{label}]({markdown_uri(relative)})")
+            lines.append(f"- [{label}](<{self._page_ref(path, target)}>)")
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+
+    def rewrite_internal_links(self, staging: Path) -> None:
+        page_pairs: dict[tuple[str, str], list[Path]] = {}
+        page_ids: dict[str, list[Path]] = {}
+        section_ids: dict[str, set[Path]] = {}
+        for item in self.mapping:
+            markdown = Path(str(item["markdown"]))
+            page_id = item.get("legacyPageId")
+            section_id = item.get("legacySectionId")
+            if page_id:
+                page_key = str(page_id)
+                page_ids.setdefault(page_key, []).append(markdown)
+                if section_id:
+                    page_pairs.setdefault((str(section_id), page_key), []).append(markdown)
+            if section_id:
+                section_ids.setdefault(str(section_id), set()).add(Path(str(item["sectionMarkdown"])))
+
+        def validated_override(target: Path, kind: str, link_id: str) -> Path:
+            if target.is_absolute() or ".." in target.parts:
+                raise RuntimeError(f"unsafe internal link override for {kind} {link_id}: {target}")
+            if target.suffix.lower() != ".md" or not (staging / target).is_file():
+                raise RuntimeError(f"internal link override target is missing for {kind} {link_id}: {target}")
+            return target
+
+        page_overrides = {
+            link_id: validated_override(target, "page", link_id)
+            for link_id, target in self.internal_link_overrides.items()
+        }
+        section_overrides = {
+            link_id: validated_override(target, "section", link_id)
+            for link_id, target in self.internal_section_link_overrides.items()
+        }
+
+        for markdown_path in sorted(staging.rglob("*.md")):
+            source = markdown_path.relative_to(staging)
+            original = markdown_path.read_text(encoding="utf-8")
+
+            def replace_link(match: re.Match[str]) -> str:
+                url = match.group("url")
+                if not is_onenote_internal_url(url):
+                    return match.group(0)
+                self.stats["internalLinksFound"] += 1
+                label = match.group("label")
+                section_id, page_id = onenote_link_ids(url)
+                target: Path | None = None
+                resolution = ""
+                reason = ""
+
+                if page_id:
+                    if page_id in page_overrides:
+                        target = page_overrides[page_id]
+                        resolution = "page-override"
+                    elif section_id and len(page_pairs.get((section_id, page_id), [])) == 1:
+                        target = page_pairs[(section_id, page_id)][0]
+                        resolution = "section-page-id"
+                    elif len(page_ids.get(page_id, [])) == 1:
+                        target = page_ids[page_id][0]
+                        resolution = "page-id"
+                    elif len(page_ids.get(page_id, [])) > 1:
+                        reason = "page ID is ambiguous without a matching section ID"
+                    else:
+                        reason = "page ID is not present in the Markdown allowlist"
+                elif section_id:
+                    if section_id in section_overrides:
+                        target = section_overrides[section_id]
+                        resolution = "section-override"
+                    elif len(section_ids.get(section_id, set())) == 1:
+                        target = next(iter(section_ids[section_id]))
+                        resolution = "section-id"
+                    elif len(section_ids.get(section_id, set())) > 1:
+                        reason = "section ID maps to more than one section index"
+                    else:
+                        reason = "section ID is not present in the Markdown allowlist"
+                else:
+                    reason = "OneNote link contains neither a page ID nor a section ID"
+
+                report_item: dict[str, object] = {
+                    "source": source.as_posix(),
+                    "label": label,
+                    "legacySectionId": section_id,
+                    "legacyPageId": page_id,
+                }
+                if target is None:
+                    self.stats["unresolvedInternalLinks"] += 1
+                    report_item.update({"status": "unresolved", "reason": reason})
+                    self.internal_link_report.append(report_item)
+                    return match.group(0)
+
+                reference = self._page_ref(source, target)
+                self.stats["internalLinksRewritten"] += 1
+                if page_id:
+                    self.stats["internalPageLinks"] += 1
+                else:
+                    self.stats["internalSectionLinks"] += 1
+                if resolution.endswith("override"):
+                    self.stats["internalLinkOverrides"] += 1
+                report_item.update({
+                    "status": "rewritten",
+                    "resolution": resolution,
+                    "target": target.as_posix(),
+                    "reference": reference,
+                })
+                self.internal_link_report.append(report_item)
+                trailing_backslashes = len(label) - len(label.rstrip("\\"))
+                if trailing_backslashes % 2:
+                    label += "\\"
+                return f"[{label}](<{reference}>)"
+
+            rewritten = MARKDOWN_LINK.sub(replace_link, original)
+            if rewritten != original:
+                markdown_path.write_text(rewritten, encoding="utf-8")
+
+        unresolved = self.stats["unresolvedInternalLinks"]
+        if unresolved:
+            self.warnings.append(f"unresolved OneNote internal links: {unresolved}")
+
+    def write_internal_link_report(self, meta_dir: Path) -> None:
+        payload = {
+            "schemaVersion": 1,
+            "generatedAt": datetime.now(timezone.utc).isoformat(),
+            "found": self.stats["internalLinksFound"],
+            "rewritten": self.stats["internalLinksRewritten"],
+            "unresolved": self.stats["unresolvedInternalLinks"],
+            "links": self.internal_link_report,
+        }
+        (meta_dir / "internal-link-report.json").write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+        lines = [
+            front_matter([
+                ("title", "OneNote 내부 링크 변환 보고서"),
+                ("tags", "meta/onenote/links source/onenote"),
+                ("type", "onenote-internal-link-report"),
+                ("generated", True),
+            ]),
+            "# OneNote 내부 링크 변환 보고서",
+            "",
+            f"- 발견: {self.stats['internalLinksFound']}",
+            f"- SilverBullet 내부 링크로 변환: {self.stats['internalLinksRewritten']}",
+            f"- 미해결: {self.stats['unresolvedInternalLinks']}",
+            "",
+        ]
+        unresolved_items = [item for item in self.internal_link_report if item["status"] == "unresolved"]
+        if unresolved_items:
+            lines.extend(["## 미해결 링크", "", "| 원본 페이지 | 표시명 | 사유 |", "| --- | --- | --- |"])
+            for item in unresolved_items:
+                lines.append(f"| `{item['source']}` | {item['label']} | {item['reason']} |")
+        else:
+            lines.append("모든 OneNote 내부 링크를 변환했습니다.")
+        (meta_dir / "internal-link-report.md").write_text(
+            "\n".join(lines).rstrip() + "\n", encoding="utf-8"
+        )
 
     def write_layout_review_reports(self, meta_dir: Path) -> None:
         payload = {
@@ -1392,6 +1636,7 @@ class Converter:
                             section_name,
                             section_old,
                             section_relative,
+                            section_relative / "_index.md",
                         )
                     self.stats["sections"] += 1
                     section_index = section_output / "_index.md"
@@ -1406,9 +1651,11 @@ class Converter:
             self.write_index(staging / "index.md", "OneNote", root_links, "onenote-root")
             meta_dir = staging / "_meta"
             meta_dir.mkdir(parents=True, exist_ok=True)
+            self.rewrite_internal_links(staging)
             (meta_dir / "onenote-id-map.json").write_text(
                 json.dumps(self.mapping, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
             )
+            self.write_internal_link_report(meta_dir)
             self.write_layout_review_reports(meta_dir)
             self.write_document_picker_guide(meta_dir)
             self.write_tag_guide(meta_dir)
@@ -1470,6 +1717,11 @@ def main(argv: list[str] | None = None) -> int:
     print(
         "- unlocalized OneNote resources: "
         f"{converter.stats['unlocalizedResources']} in {converter.stats['unlocalizedResourcePages']} pages"
+    )
+    print(
+        "- internal OneNote links: "
+        f"{converter.stats['internalLinksRewritten']}/{converter.stats['internalLinksFound']} rewritten, "
+        f"{converter.stats['unresolvedInternalLinks']} unresolved"
     )
     print(f"- assets: {converter.stats['assets']} ({converter.stats['assetBytes']} bytes)")
     print(f"- warnings: {len(converter.warnings)}")

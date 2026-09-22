@@ -184,9 +184,34 @@ Markdown 변환은 Graph API나 PowerShell을 사용하지 않으며 macOS·Linu
 - `--`로 시작한 이름은 `_old/`로 이동하고 `status: old`, `rag_priority: fallback`을 기록합니다.
 - OneNote에서 코드 블록 대신 사용한 1×1 표는 fenced code block으로 변환합니다.
 - 이미지와 첨부파일은 페이지 옆 `.assets/`에 복사하고 상대 링크로 연결합니다.
+- OneNote 페이지·섹션 링크는 GUID를 대조해 SilverBullet 내부 페이지 링크로 바꿉니다.
 - 결과와 OneNote ID 매핑은 `output/markdown/_meta/`에 기록합니다.
 - `markdown.json`의 `curationFile`이 가리키는 비공개 교정 규칙이 있으면, 자유 배치 박스를 검토 완료된 순서와 형식으로 다시 구성합니다.
 - 교정 규칙이 원문의 박스를 빠뜨리거나 존재하지 않는 좌표를 가리키면 변환을 중단합니다. 조용히 내용을 버리지 않습니다.
+
+원본에서 삭제·이동되어 GUID만으로 찾을 수 없는 옛 내부 링크는 비공개
+`.local-config/markdown.json`의 `internalLinkOverrides`로 현행 페이지를 지정할 수 있습니다.
+키는 원본 링크의 classic OneNote page GUID이고, 값은 변환 출력 루트 기준 `.md` 경로입니다.
+페이지 ID가 없는 섹션 링크는 키 앞에 `section:`을 붙입니다.
+
+`silverBulletRoot`에는 변환본을 SilverBullet space 안에서 배치한 경로를 적습니다.
+설정하면 모든 내부 페이지 링크를 `/배치경로/페이지` 형태로 생성하므로 공백·괄호가 있는
+긴 경로와 서로 다른 섹션 사이의 링크도 모호하지 않게 연결됩니다. 배치 폴더를 옮기면 이
+값도 바꾸고 다시 변환합니다.
+
+```json
+{
+  "silverBulletRoot": "Imported/OneNote",
+  "internalLinkOverrides": {
+    "00000000-0000-0000-0000-000000000000": "Notebook/Section/Current page.md",
+    "section:11111111-1111-1111-1111-111111111111": "Notebook/Section/_index.md"
+  }
+}
+```
+
+변환 결과와 미해결 링크는 `_meta/internal-link-report.md`와
+`_meta/internal-link-report.json`에 기록됩니다. 잘못된 override 경로나 출력 밖을
+가리키는 경로는 조용히 무시하지 않고 변환을 중단합니다.
 
 macOS에서 받은 아카이브를 Linux에서 변환할 때는 `output/`과 함께 다음 로컬 설정을 옮깁니다.
 

@@ -13,7 +13,10 @@ from onenote_to_markdown import (  # noqa: E402
     MarkdownRenderer,
     build_page_tree,
     current_name,
+    is_onenote_internal_url,
     is_old_name,
+    onenote_link_ids,
+    silverbullet_relative_ref,
     tag_component,
     unlocalized_onenote_resource_ids,
 )
@@ -70,6 +73,23 @@ class MarkdownRendererTests(unittest.TestCase):
             'resources/resource-id/$value" />'
         )
         self.assertEqual({"resource-id"}, unlocalized_onenote_resource_ids(source))
+
+    def test_classic_onenote_link_ids_survive_html_section_entity_conversion(self) -> None:
+        link = (
+            "onenote:#Target%C2%A7ion-id=%7B11111111-1111-1111-1111-111111111111%7D"
+            "&page-id=%7B22222222-2222-2222-2222-222222222222%7D&end"
+        )
+        self.assertTrue(is_onenote_internal_url(link))
+        self.assertEqual(
+            (
+                "11111111-1111-1111-1111-111111111111",
+                "22222222-2222-2222-2222-222222222222",
+            ),
+            onenote_link_ids(link),
+        )
+        self.assertEqual("../Other/Target", silverbullet_relative_ref(
+            Path("Book/Section/Source.md"), Path("Book/Other/Target.md")
+        ))
 
 
 class HierarchyTests(unittest.TestCase):
@@ -213,6 +233,69 @@ class AllowlistTests(unittest.TestCase):
             second_markdown = (project / "output/markdown/Notebook/Section/Page.md").read_text()
             self.assertIn('archive_status: "incomplete"', second_markdown)
             self.assertIn("OneNote 원격 리소스 URL 1개", second_markdown)
+
+
+class InternalLinkTests(unittest.TestCase):
+    def test_page_section_and_override_links_become_silverbullet_page_links(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            project = Path(temporary)
+            config_dir = project / ".local-config"
+            staging = project / "output/markdown-staging"
+            source = staging / "Book/Section/Source.md"
+            target = staging / "Book/Section/Target.md"
+            section_index = staging / "Book/Other/_index.md"
+            moved = staging / "Book/Other/Moved.md"
+            for path in (source, target, section_index, moved):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("# test\n", encoding="utf-8")
+
+            page_id = "22222222-2222-2222-2222-222222222222"
+            page_section_id = "11111111-1111-1111-1111-111111111111"
+            other_section_id = "33333333-3333-3333-3333-333333333333"
+            moved_page_id = "44444444-4444-4444-4444-444444444444"
+            source.write_text(
+                "\n".join([
+                    f"[Target](onenote:#Target&section-id={{{page_section_id}}}&page-id={{{page_id}}}&end)",
+                    f"[Trailing \\](onenote:#Target&section-id={{{page_section_id}}}&page-id={{{page_id}}}&end)",
+                    f"[Other section](onenote:#Other&section-id={{{other_section_id}}}&end)",
+                    f"[Moved](onenote:#Moved&section-id={{{other_section_id}}}&page-id={{{moved_page_id}}}&end)",
+                ]) + "\n",
+                encoding="utf-8",
+            )
+            config_dir.mkdir()
+            config = config_dir / "markdown.json"
+            config.write_text(json.dumps({
+                "sourceArchiveRoot": "./output/archive",
+                "outputRoot": "./output/markdown",
+                "silverBulletRoot": "OneNote/markdown",
+                "notebooks": [{"id": "allowed-id", "name": "Book"}],
+                "internalLinkOverrides": {moved_page_id: "Book/Other/Moved.md"},
+            }), encoding="utf-8")
+            converter = Converter(project, config)
+            converter.mapping = [
+                {
+                    "markdown": "Book/Section/Target.md",
+                    "sectionMarkdown": "Book/Section/_index.md",
+                    "legacySectionId": page_section_id,
+                    "legacyPageId": page_id,
+                },
+                {
+                    "markdown": "Book/Other/Moved.md",
+                    "sectionMarkdown": "Book/Other/_index.md",
+                    "legacySectionId": other_section_id,
+                    "legacyPageId": "55555555-5555-5555-5555-555555555555",
+                },
+            ]
+            converter.rewrite_internal_links(staging)
+            markdown = source.read_text(encoding="utf-8")
+            self.assertIn("[Target](</OneNote/markdown/Book/Section/Target>)", markdown)
+            self.assertIn("[Trailing \\\\](</OneNote/markdown/Book/Section/Target>)", markdown)
+            self.assertIn("[Other section](</OneNote/markdown/Book/Other/_index>)", markdown)
+            self.assertIn("[Moved](</OneNote/markdown/Book/Other/Moved>)", markdown)
+            self.assertNotIn("onenote:", markdown)
+            self.assertEqual(4, converter.stats["internalLinksFound"])
+            self.assertEqual(4, converter.stats["internalLinksRewritten"])
+            self.assertEqual(1, converter.stats["internalLinkOverrides"])
 
 
 class CurationTests(unittest.TestCase):
