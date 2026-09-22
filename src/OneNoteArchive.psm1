@@ -1034,8 +1034,27 @@ function Repair-OneNoteArchive {
         try {
             $displayTitle = if ($issue.title) { $issue.title } else { '(제목 확인 불가)' }
             Write-Host "`n[repair] $displayTitle"
-            Write-Host '  [download] 페이지 메타데이터'
-            $page = Get-OneNotePage -PageId ([string] $issue.pageId)
+            $pageMetadataPath = Join-Path $pageDirectory 'page.json'
+            $page = $null
+            if ((Test-Path -LiteralPath $pageMetadataPath -PathType Leaf) -and
+                (Get-Item -LiteralPath $pageMetadataPath).Length -gt 0) {
+                try {
+                    $page = Get-Content -LiteralPath $pageMetadataPath -Raw -Encoding utf8 | ConvertFrom-Json
+                    if (-not $page.id) {
+                        $page = $null
+                    }
+                }
+                catch {
+                    $page = $null
+                }
+            }
+            if ($null -ne $page) {
+                Write-Host '  [reuse] 페이지 메타데이터'
+            }
+            else {
+                Write-Host '  [download] 페이지 메타데이터'
+                $page = Get-OneNotePage -PageId ([string] $issue.pageId)
+            }
             $result = Export-OneNotePage `
                 -Page $page `
                 -ArchiveSectionPath $sectionDirectory `

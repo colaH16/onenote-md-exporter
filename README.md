@@ -160,7 +160,7 @@ pwsh ./onenote-export.ps1 verify -Output /path/to/output
 pwsh ./onenote-export.ps1 repair
 ```
 
-`repair`는 `page.json` 또는 마지막 `manifest.json`에 기록된 OneNote 페이지 ID를 사용합니다. 불완전한 페이지만 Graph에서 다시 받고, 이미 받은 정상 리소스는 재사용합니다. 결과는 `output/repair-report.json`에 기록됩니다.
+`repair`는 `page.json` 또는 마지막 `manifest.json`에 기록된 OneNote 페이지 ID를 사용합니다. 불완전한 페이지만 Graph에서 다시 받고, 기존 `page.json` 메타데이터와 이미 받은 정상 리소스는 재사용합니다. 결과는 `output/repair-report.json`에 기록됩니다.
 
 첨부파일 하나가 실패해도 `page.raw.html`, `page.local.html`, `layout.json`, `page.json`은 작성하고, `page.json`에 `archiveStatus: incomplete`과 실패한 리소스를 기록합니다. 누락된 파일을 `assets/`에 같은 이름으로 수동 보완한 뒤 `repair`를 다시 실행하면, 파일을 재사용하고 SHA-256을 기록해 완료 상태로 갱신합니다. 원본 페이지 ID가 `404 Not Found`를 반환하는 항목은 삭제·이동·재생성 여부를 확인해야 하는 자동 복구 불가 항목으로 표시합니다.
 
