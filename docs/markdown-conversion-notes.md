@@ -45,6 +45,23 @@
 - 교정 완료 페이지에는 `layout_curated: true`, `needs_visual_review: false`를 기록하고 자유 배치 우선 검토 목록에서 제외합니다.
 - 다른 머신에서 재변환하려면 `output/`과 `.local-config/markdown.json`, `.local-config/curation.json`을 함께 복사합니다.
 
+## 손글씨·수식 판독
+
+- OCR 결과나 글자 모양 하나만으로 문자를 확정하지 않습니다.
+- 앞뒤 설명, 수식 안의 역할, 단위, 회로·수학·전산 분야의 표준 기호, 같은 페이지에서 반복되는 표기를 함께 봅니다.
+- 특히 `t/τ`, `l/1/I`, `O/0`, `v/ν`, `p/ρ`처럼 모양이 비슷한 문자는 문맥으로 구분합니다.
+- 문맥상 명확한 기호는 Unicode 문자와 읽는 이름을 함께 기록하여 사람과 RAG가 모두 검색할 수 있게 합니다. 예: `τ`(tau).
+- 문맥으로도 확정할 수 없는 문자는 추측해 본문으로 굳히지 않습니다. 원본 이미지를 보존하고 검토 필요 상태로 남깁니다.
+
+## SilverBullet 태그와 탐색기
+
+- 일반 페이지는 `source/onenote`, 노트북, 섹션, current/old, RAG 우선순위, 배치 검토 상태를 태그로 가집니다.
+- 이미지·PDF·영상·첨부가 있으면 `has/document`와 유형별 태그를 추가하고 `document_count`, `document_bytes`, `document_types`를 기록합니다.
+- 생성된 인덱스와 보고서는 `meta/onenote/...` 태그를 사용하여 일반 Page Picker에서 분리합니다.
+- `_meta/document-picker.md`는 Document Picker 사용법과 확장자별 첨부 수를 보여 주는 meta 페이지입니다.
+- `_meta/tag-guide.md`는 주요 운영 태그별 페이지 수와 Picker 사용법을 보여 주는 meta 페이지입니다.
+- 태그는 원본 구조나 파일 형식처럼 확정할 수 있는 사실만 자동 생성합니다. 본문 의미를 추측한 기술·주제 태그는 검토 없이 자동 부여하지 않습니다.
+
 ## 수동 보완한 리소스
 
 - `page.json`에 다운로드 실패로 남아 있어도 `assets/`에 같은 이름의 비어 있지 않은 파일을 수동으로 넣었다면 변환본에서는 완료로 판정합니다.

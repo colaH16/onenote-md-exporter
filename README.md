@@ -198,6 +198,26 @@ macOS에서 받은 아카이브를 Linux에서 변환할 때는 `output/`과 함
 
 `curation.json`에는 OneNote 페이지 ID와 개인 문서 구조가 들어갈 수 있으므로 `output/`과 마찬가지로 공개 Git에 커밋하지 않습니다. `--replace`는 `output/markdown/`만 교체하며 `.local-config/curation.json`은 건드리지 않습니다.
 
+### SilverBullet 탐색용 메타데이터
+
+변환된 일반 페이지에는 원본에서 확실히 알 수 있는 구조 정보만 태그로 추가합니다.
+
+- `source/onenote`, `type/note`
+- `notebook/<이름>`, `section/<이름>`
+- `status/current` 또는 `status/old`
+- `rag/normal` 또는 `rag/fallback`
+- `layout/automatic`, `layout/review`, `layout/curated`
+- 첨부가 있으면 `has/document`와 `document/image`, `document/pdf`, `document/video`, `document/audio`, `document/attachment`
+
+사용 방법:
+
+- Page Picker에서 `#태그`를 함께 입력해 일반 노트를 좁힙니다.
+- Tag Picker는 `Ctrl-Alt-t` 또는 Page Picker의 첫 글자로 `#`을 입력해 엽니다.
+- 생성된 노트북·섹션 인덱스와 변환 보고서는 `meta/onenote/...` 태그를 사용하므로 일반 Page Picker에서는 숨고 Meta Picker에서 보입니다. Page Picker의 첫 글자로 `^`를 입력합니다.
+- `Navigate: Document Picker`를 실행하면 `.assets/`의 이미지·PDF·영상·첨부파일을 페이지 제목 또는 원본 파일명으로 찾을 수 있습니다.
+- 첨부 현황과 확장자별 개수는 `_meta/document-picker.md`에 생성됩니다.
+- 실제 태그별 페이지 수와 사용 안내는 `_meta/tag-guide.md`에 생성됩니다.
+
 ## 자유 배치와 주석
 
 `layout.json`은 절대 위치 요소의 태그, OneNote ID, 좌표, 크기와 HTML 내 위치를 기록합니다. 단어 옆에 배치한 해설처럼 공간 관계가 의미를 가지는 페이지를 찾는 근거로 사용합니다.
@@ -212,6 +232,8 @@ Markdown 변환 단계에서는 가까운 블록과 정렬 관계를 이용해 �
 판단이 애매한 페이지는 자동 확정하지 않고 시각 검토 대상으로 남깁니다.
 
 검토가 끝난 페이지는 `curation.json`에서 원본 박스 좌표를 명시해 순서를 정합니다. 결과 문서에는 `layout_curated: true`, `needs_visual_review: false`가 기록됩니다. 여러 줄 설정을 가로로 비교해야 하는 표는 SilverBullet의 HTML-in-Markdown 지원을 이용해 `<table>`과 `<pre><code>`로 생성합니다.
+
+손글씨와 수식은 글자 모양만으로 판독하지 않습니다. 앞뒤 문장, 식에서의 역할, 전공 분야의 표준 기호와 같은 페이지의 반복 표기를 함께 확인해 `t/τ`, `l/1`, `O/0` 등을 구분합니다. 문맥으로도 하나로 확정할 수 없으면 임의로 정규화하지 않고 원본 이미지를 유지한 채 검토 대상으로 남깁니다.
 
 ## 보안
 

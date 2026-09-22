@@ -9,6 +9,7 @@ that are not listed there are never traversed or copied.
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 import hashlib
 import html
 import json
@@ -78,6 +79,9 @@ ONENOTE_RESOURCE_URL = re.compile(
     r'https://graph\.microsoft\.com/[^"\s<>]*/onenote/resources/([^/?#"\s<>]+)/\$value',
     re.IGNORECASE,
 )
+IMAGE_EXTENSIONS = {"avif", "bmp", "gif", "heic", "heif", "jpeg", "jpg", "png", "svg", "tif", "tiff", "webp"}
+VIDEO_EXTENSIONS = {"avi", "m4v", "mkv", "mov", "mp4", "mpeg", "mpg", "webm"}
+AUDIO_EXTENSIONS = {"aac", "flac", "m4a", "mp3", "ogg", "opus", "wav", "wma"}
 
 
 @dataclass
@@ -207,7 +211,10 @@ def quote_yaml(value: object) -> str:
 def front_matter(items: Iterable[tuple[str, object]]) -> str:
     lines = ["---"]
     for key, value in items:
-        lines.append(f"{key}: {quote_yaml(value)}")
+        if key == "tags" and isinstance(value, str) and re.fullmatch(r"[^\s:]+(?:\s+[^\s:]+)*", value):
+            lines.append(f"{key}: {value}")
+        else:
+            lines.append(f"{key}: {quote_yaml(value)}")
     lines.extend(["---", ""])
     return "\n".join(lines)
 
@@ -219,6 +226,13 @@ def safe_name(value: str, fallback: str = "untitled", maximum: int = 120) -> str
         value = fallback
     if len(value) > maximum:
         value = value[:maximum].rstrip(" .")
+    return value or fallback
+
+
+def tag_component(value: str, fallback: str = "untitled") -> str:
+    value = OLD_PREFIX.sub("", value.strip())
+    value = re.sub(r"[^\w.-]+", "-", value, flags=re.UNICODE).strip("-_.").lower()
+    value = re.sub(r"-{2,}", "-", value)
     return value or fallback
 
 
@@ -686,6 +700,8 @@ class Converter:
             "assets": 0,
             "assetBytes": 0,
         }
+        self.document_extensions: Counter[str] = Counter()
+        self.tag_counts: Counter[str] = Counter()
         self.staging_root: Path | None = None
 
     def _resolve_config_path(self, value: str) -> Path:
@@ -704,12 +720,13 @@ class Converter:
             raise RuntimeError(f"allowlisted notebooks missing from archive: {len(missing)}")
         return [(discovered[item_id][0], discovered[item_id][1], self.allowed[item_id]) for item_id in self.allowed]
 
-    def copy_assets(self, source_dir: Path, destination_dir: Path) -> tuple[int, int]:
+    def copy_assets(self, source_dir: Path, destination_dir: Path) -> tuple[int, int, Counter[str]]:
         source_assets = source_dir / "assets"
         if not source_assets.is_dir():
-            return 0, 0
+            return 0, 0, Counter()
         count = 0
         size = 0
+        extensions: Counter[str] = Counter()
         for source in source_assets.rglob("*"):
             if not source.is_file() or source.name.endswith(".part"):
                 continue
@@ -719,7 +736,49 @@ class Converter:
             shutil.copy2(source, destination)
             count += 1
             size += source.stat().st_size
-        return count, size
+            extension = source.suffix.lower().lstrip(".") or "no-extension"
+            extensions[extension] += 1
+            self.document_extensions[extension] += 1
+        return count, size, extensions
+
+    @staticmethod
+    def page_tags(
+        notebook_name: str,
+        section_name: str,
+        old: bool,
+        needs_visual_review: bool,
+        curated: bool,
+        extensions: Counter[str],
+    ) -> list[str]:
+        tags = [
+            "source/onenote",
+            "type/note",
+            f"notebook/{tag_component(notebook_name)}",
+            f"section/{tag_component(section_name)}",
+            "status/old" if old else "status/current",
+            "rag/fallback" if old else "rag/normal",
+        ]
+        if curated:
+            tags.append("layout/curated")
+        elif needs_visual_review:
+            tags.append("layout/review")
+        else:
+            tags.append("layout/automatic")
+        if extensions:
+            tags.append("has/document")
+            extension_names = set(extensions)
+            if extension_names & IMAGE_EXTENSIONS:
+                tags.append("document/image")
+            if extension_names & VIDEO_EXTENSIONS:
+                tags.append("document/video")
+            if extension_names & AUDIO_EXTENSIONS:
+                tags.append("document/audio")
+            if "pdf" in extension_names:
+                tags.append("document/pdf")
+            known = IMAGE_EXTENSIONS | VIDEO_EXTENSIONS | AUDIO_EXTENSIONS | {"pdf"}
+            if extension_names - known:
+                tags.append("document/attachment")
+        return tags
 
     @staticmethod
     def _quote_callout(value: str, kind: str, title: str) -> str:
@@ -981,7 +1040,7 @@ class Converter:
             layout_note_count = 0
         else:
             body, layout_note_count = renderer.render_document(local_html)
-        assets, asset_bytes = self.copy_assets(page.source_dir, asset_dir)
+        assets, asset_bytes, document_extensions = self.copy_assets(page.source_dir, asset_dir)
         if assets == 0 and asset_dir.exists():
             asset_dir.rmdir()
 
@@ -1004,8 +1063,21 @@ class Converter:
         needs_visual_review = bool(page.metadata.get("needsVisualReview")) and not bool(
             curation and curation.get("resolved", True)
         )
+        tags = self.page_tags(
+            notebook_name,
+            section_name,
+            old,
+            needs_visual_review,
+            bool(curation),
+            document_extensions,
+        )
+        self.tag_counts.update(tags)
+        layout_status = "curated" if curation else ("review" if needs_visual_review else "automatic")
         header = front_matter([
             ("title", page.title),
+            ("tags", " ".join(tags)),
+            ("source_system", "onenote"),
+            ("content_type", "note"),
             ("onenote_id", page.page_id),
             ("onenote_notebook_id", notebook_id),
             ("notebook", notebook_name),
@@ -1016,11 +1088,15 @@ class Converter:
             ("rag_priority", "fallback" if old else "normal"),
             ("needs_visual_review", needs_visual_review),
             ("layout_curated", bool(curation)),
+            ("layout_status", layout_status),
             ("archive_status", archive_status),
             ("source_archive_status", source_archive_status),
             ("unlocalized_onenote_resources", len(unlocalized_resources)),
             ("onenote_level", page.level),
             ("onenote_order", page.order),
+            ("document_count", assets),
+            ("document_bytes", asset_bytes),
+            ("document_types", " ".join(sorted(document_extensions)) or "none"),
         ])
         content_parts = [header, f"# {page.title}\n"]
         if archive_status != "complete" or unresolved_failed_resources or unlocalized_resources:
@@ -1137,7 +1213,19 @@ class Converter:
         return current_output, current_relative, inherited_old, section_name
 
     def write_index(self, path: Path, title: str, links: list[tuple[str, Path]], kind: str) -> None:
-        lines = [front_matter([("title", title), ("type", kind), ("generated", True)]), f"# {title}", ""]
+        tags = "source/onenote index/root" if kind == "onenote-root" else "meta/onenote/index source/onenote"
+        lines = [
+            front_matter([
+                ("title", title),
+                ("displayName", title),
+                ("tags", tags),
+                ("type", kind),
+                ("source_system", "onenote"),
+                ("generated", True),
+            ]),
+            f"# {title}",
+            "",
+        ]
         for label, target in links:
             relative = os.path.relpath(target, path.parent).replace(os.sep, "/")
             lines.append(f"- [{label}]({markdown_uri(relative)})")
@@ -1156,6 +1244,12 @@ class Converter:
         )
 
         lines = [
+            front_matter([
+                ("title", "OneNote 자유 배치 우선 검토 목록"),
+                ("tags", "meta/onenote/review source/onenote layout/review"),
+                ("type", "onenote-layout-review"),
+                ("generated", True),
+            ]),
             "# OneNote 자유 배치 우선 검토 목록",
             "",
             f"자동 변환기가 옆 블록을 주석으로 해석한 {len(self.layout_reviews)}건입니다.",
@@ -1192,6 +1286,75 @@ class Converter:
                 "",
             ])
         (meta_dir / "layout-review.md").write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+
+    def write_document_picker_guide(self, meta_dir: Path) -> None:
+        lines = [
+            front_matter([
+                ("title", "OneNote 첨부 문서 안내"),
+                ("tags", "meta/onenote/documents source/onenote has/document"),
+                ("type", "onenote-document-guide"),
+                ("generated", True),
+            ]),
+            "# OneNote 첨부 문서 안내",
+            "",
+            "SilverBullet의 `Navigate: Document Picker`에서 이미지·PDF·영상·첨부파일을 찾을 수 있습니다.",
+            "각 첨부파일은 원래 페이지 옆의 `.assets/` 경로에 있으므로 페이지 제목이나 원본 파일명으로 검색합니다.",
+            "",
+            f"- 전체 문서: {self.stats['assets']}",
+            f"- 전체 크기: {self.stats['assetBytes']} bytes",
+            "",
+            "## 확장자별 개수",
+            "",
+            "| 확장자 | 개수 |",
+            "| --- | ---: |",
+        ]
+        for extension, count in sorted(self.document_extensions.items(), key=lambda item: (-item[1], item[0])):
+            lines.append(f"| `{extension}` | {count} |")
+        (meta_dir / "document-picker.md").write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+
+    def write_tag_guide(self, meta_dir: Path) -> None:
+        operational_tags = [
+            "source/onenote",
+            "type/note",
+            "status/current",
+            "status/old",
+            "rag/normal",
+            "rag/fallback",
+            "layout/automatic",
+            "layout/review",
+            "layout/curated",
+            "has/document",
+            "document/image",
+            "document/pdf",
+            "document/video",
+            "document/audio",
+            "document/attachment",
+        ]
+        notebook_tags = [tag for tag in self.tag_counts if tag.startswith("notebook/")]
+        section_tags = [tag for tag in self.tag_counts if tag.startswith("section/")]
+        lines = [
+            front_matter([
+                ("title", "OneNote 태그 안내"),
+                ("tags", "meta/onenote/tags source/onenote"),
+                ("type", "onenote-tag-guide"),
+                ("generated", True),
+            ]),
+            "# OneNote 태그 안내",
+            "",
+            "Page Picker 검색어에 `#태그`를 함께 입력하면 결과를 좁힐 수 있습니다.",
+            "Tag Picker는 `Ctrl-Alt-t` 또는 Page Picker에서 첫 글자로 `#`을 입력해 엽니다.",
+            "",
+            f"- `notebook/...`: {len(notebook_tags)}종",
+            f"- `section/...`: {len(section_tags)}종",
+            "",
+            "## 운영 태그 현황",
+            "",
+            "| 태그 | 페이지 수 |",
+            "| --- | ---: |",
+        ]
+        for tag in operational_tags:
+            lines.append(f"| `#{tag}` | {self.tag_counts.get(tag, 0)} |")
+        (meta_dir / "tag-guide.md").write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
 
     def convert(self) -> Path:
         notebooks = self.discover_notebooks()
@@ -1247,6 +1410,8 @@ class Converter:
                 json.dumps(self.mapping, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
             )
             self.write_layout_review_reports(meta_dir)
+            self.write_document_picker_guide(meta_dir)
+            self.write_tag_guide(meta_dir)
             report = {
                 "schemaVersion": 1,
                 "convertedAt": datetime.now(timezone.utc).isoformat(),

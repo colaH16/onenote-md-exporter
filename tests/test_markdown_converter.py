@@ -14,6 +14,7 @@ from onenote_to_markdown import (  # noqa: E402
     build_page_tree,
     current_name,
     is_old_name,
+    tag_component,
     unlocalized_onenote_resource_ids,
 )
 
@@ -94,6 +95,9 @@ class HierarchyTests(unittest.TestCase):
     def test_old_prefix_is_removed_but_status_is_detectable(self) -> None:
         self.assertTrue(is_old_name("---deprecated"))
         self.assertEqual("deprecated", current_name("---deprecated"))
+
+    def test_tag_component_is_stable_and_picker_friendly(self) -> None:
+        self.assertEqual("대학-노트-3-1", tag_component("대학 노트 3 - 1"))
 
 
 class AllowlistTests(unittest.TestCase):
@@ -178,7 +182,21 @@ class AllowlistTests(unittest.TestCase):
             markdown = (project / "output/markdown/Notebook/Section/Page.md").read_text()
             self.assertIn('archive_status: "complete"', markdown)
             self.assertIn('source_archive_status: "incomplete"', markdown)
+            self.assertIn("tags: source/onenote type/note", markdown)
+            self.assertIn("has/document", markdown)
+            self.assertIn("document/video", markdown)
+            self.assertIn("document_count: 1", markdown)
+            self.assertIn('document_types: "mov"', markdown)
             self.assertNotIn("OneNote 아카이브 일부 누락", markdown)
+
+            notebook_index = (project / "output/markdown/Notebook/_index.md").read_text(encoding="utf-8")
+            self.assertIn("tags: meta/onenote/index source/onenote", notebook_index)
+            document_guide = (project / "output/markdown/_meta/document-picker.md").read_text(encoding="utf-8")
+            self.assertIn("tags: meta/onenote/documents", document_guide)
+            self.assertIn("| `mov` | 1 |", document_guide)
+            tag_guide = (project / "output/markdown/_meta/tag-guide.md").read_text(encoding="utf-8")
+            self.assertIn("tags: meta/onenote/tags", tag_guide)
+            self.assertIn("| `#document/video` | 1 |", tag_guide)
 
             (page / "page.local.html").write_text(
                 '<html><body><img src="https://graph.microsoft.com/v1.0/me/onenote/'
