@@ -36,7 +36,7 @@ brew install powershell
 pwsh -NoProfile -Command 'Install-Module Microsoft.Graph.Authentication -Scope CurrentUser'
 ```
 
-Azure 구독이나 별도의 Entra 앱 등록은 필요하지 않습니다. 로그인할 때 Microsoft Graph PowerShell SDK의 앱을 사용하며 읽기 전용 `Notes.Read` 권한만 요청합니다. 우선 사용자 영역에 로그인을 저장하고, Graph SDK의 `CurrentUser` 컨텍스트가 정상 생성되지 않는 환경에서는 현재 PowerShell 프로세스 로그인으로 자동 전환합니다.
+Azure 구독이나 별도의 Entra 앱 등록은 필요하지 않습니다. 로그인할 때 Microsoft Graph PowerShell SDK의 앱을 사용하며 읽기 전용 `Notes.Read` 권한만 요청합니다. macOS에서 Graph SDK의 `CurrentUser` 컨텍스트가 안정적으로 재사용되지 않아, 한 명령에서 한 번만 로그인하는 `Process` 방식을 사용합니다.
 
 ## 사용법
 
@@ -48,7 +48,7 @@ pwsh ./onenote-export.ps1 list
 
 브라우저에 표시되는 일회용 코드를 입력하고 개인 Microsoft 계정으로 로그인합니다.
 
-`login`은 인증만 점검하는 명령입니다. `CurrentUser` 저장이 작동하지 않아 `Process` 방식으로 전환되면 `login`이 끝난 후 컨텍스트도 종료되므로, `export`나 `repair`를 직접 실행해 그 안에서 로그인합니다. 저장된 권한을 지우려면 다음을 실행합니다.
+`login`은 인증 흐름만 점검하는 명령입니다. `Process` 로그인은 명령이 끝나면 종료되므로, `export`나 `repair`를 직접 실행해 그 안에서 로그인합니다. 한 번 로그인하면 해당 명령 안의 재시도는 다시 로그인하지 않습니다.
 
 ```fish
 pwsh ./onenote-export.ps1 login
@@ -178,7 +178,7 @@ Markdown 변환 단계에서는 가까운 블록과 정렬 관계를 이용해 �
 ## 보안
 
 - Graph 권한은 `Notes.Read`만 사용합니다.
-- `login`은 인증 모듈 로드, 사용 가능한 컨텍스트 확인, 필요 시 기기 로그인의 각 단계를 화면에 표시합니다.
-- 인증은 `CurrentUser`를 우선 사용하며, 컨텍스트 생성에 실패하면 해당 pwsh 실행이 끝날 때까지 유지되는 `Process`로 자동 전환합니다.
+- `login`은 인증 모듈 로드와 기기 로그인 흐름을 점검합니다.
+- 인증은 해당 pwsh 명령이 끝날 때까지 유지되는 `Process` 방식을 사용합니다. 명령 내부의 429·5xx 재시도는 추가 로그인이 필요하지 않습니다.
 - 페이지 본문이나 토큰을 별도 로그에 남기지 않습니다.
 - `output/`, `.local-config/`, 기존 `config.local.json`은 커밋하지 않습니다.
