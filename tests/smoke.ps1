@@ -96,6 +96,18 @@ catch {
 }
 Assert-Equal 504 $gatewayTimeoutStatus 'SDK가 이름으로만 남긴 GatewayTimeout을 504로 감지해야 합니다.'
 
+$notFoundStatus = 0
+try {
+    throw [System.Exception]::new('Response status code does not indicate success: NotFound (Not Found).')
+}
+catch {
+    $notFoundStatus = & $archiveModule {
+        param($ErrorRecord)
+        Get-GraphStatusCode -ErrorRecord $ErrorRecord
+    } $_
+}
+Assert-Equal 404 $notFoundStatus 'SDK가 이름으로만 남긴 NotFound를 404로 감지해야 합니다.'
+
 $throttleRetryCalls = & $archiveModule {
     $script:ThrottleRetryCalls = 0
     function Invoke-MgGraphRequest {
@@ -164,6 +176,104 @@ try {
     Assert-Equal 64 $pageMetadata.files.rawHtml.sha256.Length '원본 HTML SHA-256이 기록되어야 합니다.'
     Assert-Equal 2 @($pageMetadata.resources).Count '리소스 메타데이터 수가 잘못됐습니다.'
     Assert-Equal 64 $pageMetadata.resources[0].sha256.Length '리소스 SHA-256이 기록되어야 합니다.'
+
+    $partialSection = Join-Path $temporaryRoot 'partial-resource-section'
+    New-Item -ItemType Directory -Path $partialSection -Force | Out-Null
+    $partialExportFailed = $false
+    try {
+        & $archiveModule {
+            param($ArchivePath, $Html)
+
+            $script:PartialPageHtml = $Html
+            function Invoke-MgGraphRequest {
+                [CmdletBinding()]
+                param(
+                    [string] $Method,
+                    [string] $Uri,
+                    [string] $OutputFilePath
+                )
+
+                if ($Uri -match '/pages/.+/content') {
+                    [System.IO.File]::WriteAllText($OutputFilePath, $script:PartialPageHtml, [System.Text.UTF8Encoding]::new($false))
+                }
+                elseif ($Uri -match '/resources/file/') {
+                    throw [System.Exception]::new('HTTP request failed with status code: GatewayTimeout.')
+                }
+                else {
+                    [System.IO.File]::WriteAllBytes($OutputFilePath, [byte[]](1, 2, 3, 4))
+                }
+            }
+            function Start-Sleep {
+                param([int] $Seconds)
+            }
+
+            $page = [pscustomobject]@{
+                id = 'partial-resource-page-id'
+                title = 'Partial resource page'
+                createdDateTime = '2026-01-01T00:00:00Z'
+                lastModifiedDateTime = '2026-01-02T00:00:00Z'
+                level = 0
+                order = 0
+                links = [pscustomobject]@{}
+            }
+            Export-OneNotePage -Page $page -ArchiveSectionPath $ArchivePath -Force
+        } $partialSection $sampleHtml
+    }
+    catch {
+        $partialExportFailed = $true
+    }
+    Assert-Equal $true $partialExportFailed '리소스 누락은 페이지 내보내기 실패로 보고해야 합니다.'
+
+    $partialPageDirectory = Join-Path $partialSection (Get-StableId -Value 'partial-resource-page-id')
+    foreach ($requiredPartialFile in @('page.raw.html', 'page.local.html', 'layout.json', 'page.json')) {
+        Assert-Equal $true (Test-Path -LiteralPath (Join-Path $partialPageDirectory $requiredPartialFile)) "리소스가 실패해도 $requiredPartialFile 파일을 보존해야 합니다."
+    }
+    $partialMetadata = Get-Content -LiteralPath (Join-Path $partialPageDirectory 'page.json') -Raw | ConvertFrom-Json
+    Assert-Equal 'incomplete' $partialMetadata.archiveStatus '누락 리소스가 있는 페이지는 incomplete로 기록해야 합니다.'
+    Assert-Equal 1 $partialMetadata.failedResourceCount '실패한 리소스 수가 잘못되었습니다.'
+    Assert-Equal 'failed' $partialMetadata.resources[1].status '실패한 리소스 상태를 기록해야 합니다.'
+
+    [System.IO.File]::WriteAllBytes(
+        (Join-Path $partialPageDirectory 'assets/example.pdf'),
+        [byte[]](5, 6, 7, 8)
+    )
+    $resourceDownloadCalls = & $archiveModule {
+        param($ArchivePath, $Html)
+
+        $script:PartialPageHtml = $Html
+        $script:ResourceDownloadCalls = 0
+        function Invoke-MgGraphRequest {
+            [CmdletBinding()]
+            param(
+                [string] $Method,
+                [string] $Uri,
+                [string] $OutputFilePath
+            )
+
+            if ($Uri -match '/pages/.+/content') {
+                [System.IO.File]::WriteAllText($OutputFilePath, $script:PartialPageHtml, [System.Text.UTF8Encoding]::new($false))
+                return
+            }
+            $script:ResourceDownloadCalls++
+            throw [System.Exception]::new('Existing resources should have been reused.')
+        }
+
+        $page = [pscustomobject]@{
+            id = 'partial-resource-page-id'
+            title = 'Partial resource page'
+            createdDateTime = '2026-01-01T00:00:00Z'
+            lastModifiedDateTime = '2026-01-02T00:00:00Z'
+            level = 0
+            order = 0
+            links = [pscustomobject]@{}
+        }
+        [void] (Export-OneNotePage -Page $page -ArchiveSectionPath $ArchivePath -Force -ReuseExistingResources)
+        return $script:ResourceDownloadCalls
+    } $partialSection $sampleHtml
+    Assert-Equal 0 $resourceDownloadCalls '이미 있는 리소스는 repair에서 다시 받지 않아야 합니다.'
+    $reconciledMetadata = Get-Content -LiteralPath (Join-Path $partialPageDirectory 'page.json') -Raw | ConvertFrom-Json
+    Assert-Equal 'complete' $reconciledMetadata.archiveStatus '수동으로 보완한 리소스를 재사용하면 complete로 갱신해야 합니다.'
+    Assert-Equal 'reused' $reconciledMetadata.resources[1].status '수동으로 보완한 리소스의 재사용 상태를 기록해야 합니다.'
 
     $verifyOutput = Join-Path $temporaryRoot 'verify-output'
     $verifySection = Join-Path $verifyOutput 'archive/notebook/section'

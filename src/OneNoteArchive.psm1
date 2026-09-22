@@ -159,10 +159,11 @@ function Get-GraphStatusCode {
     if ($errorText -match 'TooManyRequests|\b20166\b|status\s+code\s*:\s*429|\bHTTP\s+429\b') {
         return 429
     }
-    if ($errorText -match 'status\s+code\s*:\s*(?<status>408|500|502|503|504)\b|\bHTTP\s+(?<httpStatus>408|500|502|503|504)\b') {
+    if ($errorText -match 'status\s+code\s*:\s*(?<status>404|408|500|502|503|504)\b|\bHTTP\s+(?<httpStatus>404|408|500|502|503|504)\b') {
         $matchedStatus = if ($Matches['status']) { $Matches['status'] } else { $Matches['httpStatus'] }
         return [int] $matchedStatus
     }
+    if ($errorText -match '\bNotFound\b|\bNot Found\b') { return 404 }
     if ($errorText -match '\bRequestTimeout\b') { return 408 }
     if ($errorText -match '\bInternalServerError\b') { return 500 }
     if ($errorText -match '\bBadGateway\b') { return 502 }
@@ -602,7 +603,8 @@ function Export-OneNotePage {
         [Parameter(Mandatory)] $Page,
         [Parameter(Mandatory)][string] $ArchiveSectionPath,
         [switch] $Force,
-        [switch] $ShowProgress
+        [switch] $ShowProgress,
+        [switch] $ReuseExistingResources
     )
 
     $pageStableId = Get-StableId -Value ([string] $Page.id)
@@ -620,7 +622,9 @@ function Export-OneNotePage {
         (Test-Path -LiteralPath $localHtmlPath)) {
         try {
             $existing = Get-Content -LiteralPath $metadataPath -Raw -Encoding utf8 | ConvertFrom-Json
-            if ($existing.lastModifiedDateTime -eq $Page.lastModifiedDateTime) {
+            $existingArchiveIncomplete = $null -ne $existing.PSObject.Properties['archiveStatus'] -and
+                $existing.archiveStatus -eq 'incomplete'
+            if ($existing.lastModifiedDateTime -eq $Page.lastModifiedDateTime -and -not $existingArchiveIncomplete) {
                 $existingNeedsReview = if ($null -ne $existing.PSObject.Properties['needsVisualReview']) {
                     [bool] $existing.needsVisualReview
                 }
@@ -661,6 +665,7 @@ function Export-OneNotePage {
     $externalMediaReferences = @(Get-ExternalMediaReferences -Html $html)
     $needsVisualReview = [bool] $layout.needsVisualReview -or $externalMediaReferences.Count -gt 0
     $resourceMetadata = [System.Collections.Generic.List[object]]::new()
+    $failedResources = [System.Collections.Generic.List[object]]::new()
     $usedNames = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
     $resourceNumber = 0
 
@@ -678,19 +683,54 @@ function Export-OneNotePage {
         $encodedResourceId = [uri]::EscapeDataString([string] $resource.ResourceId)
         $resourceUri = "$script:GraphRoot/resources/$encodedResourceId/`$value"
         $resourcePath = Join-Path $assetsPath $fileName
-        if ($ShowProgress) {
-            Write-Host "  [download] 리소스 $resourceNumber/$($resources.Count): $fileName"
+        try {
+            $reuseResource = $ReuseExistingResources -and
+                (Test-Path -LiteralPath $resourcePath -PathType Leaf) -and
+                (Get-Item -LiteralPath $resourcePath).Length -gt 0
+            if ($ShowProgress) {
+                $progressAction = if ($reuseResource) { 'reuse' } else { 'download' }
+                Write-Host "  [$progressAction] 리소스 $resourceNumber/$($resources.Count): $fileName"
+            }
+            if (-not $reuseResource) {
+                # Invoke-MgGraphRequest already performs its own retries. Avoid multiplying
+                # those retries by the outer page-request retry loop for large attachments.
+                Invoke-OneNoteGraphRequest -Uri $resourceUri -OutputFilePath $resourcePath -MaximumAttempts 1
+            }
+            $integrity = Get-FileIntegrity -Path $resourcePath
+            $resourceMetadata.Add([ordered]@{
+                id = $resource.ResourceId
+                kind = $resource.Kind
+                fileName = $fileName
+                mimeType = $resource.MimeType
+                status = if ($reuseResource) { 'reused' } else { 'downloaded' }
+                size = $integrity.size
+                sha256 = $integrity.sha256
+                error = $null
+            })
         }
-        Invoke-OneNoteGraphRequest -Uri $resourceUri -OutputFilePath $resourcePath
-        $integrity = Get-FileIntegrity -Path $resourcePath
-        $resourceMetadata.Add([ordered]@{
-            id = $resource.ResourceId
-            kind = $resource.Kind
-            fileName = $fileName
-            mimeType = $resource.MimeType
-            size = $integrity.size
-            sha256 = $integrity.sha256
-        })
+        catch {
+            $partPath = "$resourcePath.part"
+            if (Test-Path -LiteralPath $partPath -PathType Leaf) {
+                Remove-Item -LiteralPath $partPath -Force
+            }
+            $errorMessage = [string] $_.Exception.Message
+            if ($errorMessage.Length -gt 4000) {
+                $errorMessage = $errorMessage.Substring(0, 4000) + '...'
+            }
+            $failedResource = [ordered]@{
+                id = $resource.ResourceId
+                kind = $resource.Kind
+                fileName = $fileName
+                mimeType = $resource.MimeType
+                status = 'failed'
+                size = $null
+                sha256 = $null
+                error = $errorMessage
+            }
+            $resourceMetadata.Add($failedResource)
+            $failedResources.Add($failedResource)
+            Write-Warning "리소스 다운로드 실패: $fileName - $errorMessage"
+        }
     }
 
     $localHtml = Convert-HtmlResourceUrls -Html $html -Resources $resources
@@ -712,6 +752,8 @@ function Export-OneNotePage {
         layout = $layout
         externalMediaReferences = $externalMediaReferences
         resources = $resourceMetadata.ToArray()
+        archiveStatus = if ($failedResources.Count -eq 0) { 'complete' } else { 'incomplete' }
+        failedResourceCount = $failedResources.Count
         files = [ordered]@{
             rawHtml = $rawHtmlIntegrity
             localHtml = $localHtmlIntegrity
@@ -719,6 +761,11 @@ function Export-OneNotePage {
         exportedAt = [DateTimeOffset]::UtcNow.ToString('o')
     }
     Write-JsonFile -Path $metadataPath -Value $metadata
+
+    if ($failedResources.Count -gt 0) {
+        $failedNames = @($failedResources | ForEach-Object { $_.fileName }) -join ', '
+        throw "리소스 $($failedResources.Count)개를 받지 못했습니다. 페이지 HTML·배치·메타데이터는 보존했습니다: $failedNames"
+    }
 
     return [pscustomobject]@{
         Status = 'exported'
@@ -832,8 +879,13 @@ function Test-OneNoteArchive {
                         if ($null -eq $fileNameProperty -or -not $fileNameProperty.Value) {
                             continue
                         }
+                        $resourceStatusProperty = $resource.PSObject.Properties['status']
+                        $resourceFailed = $null -ne $resourceStatusProperty -and $resourceStatusProperty.Value -eq 'failed'
                         $resourcePath = Join-Path (Join-Path $pageDirectory.FullName 'assets') ([string] $fileNameProperty.Value)
-                        if (-not (Test-Path -LiteralPath $resourcePath -PathType Leaf)) {
+                        if ($resourceFailed) {
+                            $missingResources.Add("$($fileNameProperty.Value) (다운로드 실패)")
+                        }
+                        elseif (-not (Test-Path -LiteralPath $resourcePath -PathType Leaf)) {
                             $missingResources.Add([string] $fileNameProperty.Value)
                         }
                         elseif ((Get-Item -LiteralPath $resourcePath).Length -eq 0) {
@@ -922,7 +974,8 @@ function Repair-OneNoteArchive {
                 -Page $page `
                 -ArchiveSectionPath $sectionDirectory `
                 -Force `
-                -ShowProgress
+                -ShowProgress `
+                -ReuseExistingResources
 
             foreach ($partFile in @(Get-ChildItem -LiteralPath $pageDirectory -Recurse -File -Filter '*.part')) {
                 Remove-Item -LiteralPath $partFile.FullName -Force
@@ -936,12 +989,23 @@ function Repair-OneNoteArchive {
             })
         }
         catch {
-            $failed.Add([ordered]@{
-                pageId = $issue.pageId
-                title = $issue.title
-                path = $issue.path
-                error = $_.Exception.Message
-            })
+            $statusCode = Get-GraphStatusCode -ErrorRecord $_
+            if ($statusCode -eq 404) {
+                $unrepairable.Add([ordered]@{
+                    pageId = $issue.pageId
+                    title = $issue.title
+                    path = $issue.path
+                    reason = '원본 OneNote 페이지 ID가 404를 반환합니다. 페이지가 삭제·이동·재생성되었는지 확인해야 합니다.'
+                })
+            }
+            else {
+                $failed.Add([ordered]@{
+                    pageId = $issue.pageId
+                    title = $issue.title
+                    path = $issue.path
+                    error = $_.Exception.Message
+                })
+            }
         }
     }
 
