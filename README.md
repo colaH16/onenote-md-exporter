@@ -252,6 +252,13 @@ macOS에서 받은 아카이브를 Linux에서 변환할 때는 `output/`과 함
 - 첨부 현황과 확장자별 개수는 `_meta/document-picker.md`에 생성됩니다.
 - 실제 태그별 페이지 수와 사용 안내는 `_meta/tag-guide.md`에 생성됩니다.
 
+코드 블록의 배경과 경계는 SilverBullet space 루트의 `STYLES.md`에 있는
+`space-style` 블록으로 조정합니다. 예시는
+[`examples/silverbullet-code-style.md`](examples/silverbullet-code-style.md)에 있습니다.
+이 파일은 `OneNote/markdown/` 밖에 두므로 변환 결과를 다시 동기화해도 유지됩니다.
+스타일 변경 후 브라우저에서 `System: Reload`를 실행합니다. CSS 변수는 SilverBullet
+클라이언트의 테마 변수이며 Kubernetes ConfigMap이나 컨테이너 환경 변수가 아닙니다.
+
 ## 자유 배치와 주석
 
 `layout.json`은 절대 위치 요소의 태그, OneNote ID, 좌표, 크기와 HTML 내 위치를 기록합니다. 단어 옆에 배치한 해설처럼 공간 관계가 의미를 가지는 페이지를 찾는 근거로 사용합니다.
