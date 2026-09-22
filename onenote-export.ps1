@@ -190,10 +190,12 @@ function Initialize-ConversionConfiguration {
             displayName = $notebook.name
         }
     }
-    Write-Host "`n백업 대상 노트북 $($displayNotebooks.Count)개:`n"
+    Write-Host "`n백업 설정은 변경하지 않습니다."
+    Write-Host "아래는 export.json에 이미 등록된 백업 대상이며, Markdown 변환 후보입니다."
+    Write-Host "변환 후보 노트북 $($displayNotebooks.Count)개:`n"
     Show-Notebooks -Notebooks @($displayNotebooks)
     Write-Host ''
-    $selectionText = Read-Host 'Markdown·SilverBullet·RAG에 사용할 번호를 입력하세요 (예: 1,3,5-8)'
+    $selectionText = Read-Host '이 중 Markdown·SilverBullet·RAG에 포함할 번호만 입력하세요 (예: 1,3,5-8)'
     $selection = @(ConvertFrom-NumberSelection -Selection $selectionText -Maximum $displayNotebooks.Count)
 
     $selected = @(

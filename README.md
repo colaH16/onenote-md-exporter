@@ -74,6 +74,8 @@ pwsh ./onenote-export.ps1 init
 pwsh ./onenote-export.ps1 init-conversion
 ```
 
+이 명령은 기존 백업 목록을 후보로 보여줄 뿐 `.local-config/export.json`을 변경하지 않습니다. 선택한 하위 목록만 `.local-config/markdown.json`에 저장합니다. 잘못 선택했다면 같은 명령을 다시 실행해 덮어쓸 수 있습니다.
+
 다음 파일은 모두 Git에서 제외됩니다.
 
 ```text
