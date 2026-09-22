@@ -15,3 +15,5 @@ jobs:
       - name: Run PowerShell smoke tests
         shell: pwsh
         run: ./tests/smoke.ps1
+      - name: Run Markdown converter tests
+        run: python3 -m unittest tests/test_markdown_converter.py

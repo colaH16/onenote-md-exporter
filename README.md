@@ -164,6 +164,27 @@ pwsh ./onenote-export.ps1 repair
 
 첨부파일 하나가 실패해도 `page.raw.html`, `page.local.html`, `layout.json`, `page.json`은 작성하고, `page.json`에 `archiveStatus: incomplete`과 실패한 리소스를 기록합니다. 누락된 파일을 `assets/`에 같은 이름으로 수동 보완한 뒤 `repair`를 다시 실행하면, 파일을 재사용하고 SHA-256을 기록해 완료 상태로 갱신합니다. 원본 페이지 ID가 `404 Not Found`를 반환하는 항목은 삭제·이동·재생성 여부를 확인해야 하는 자동 복구 불가 항목으로 표시합니다.
 
+## Markdown 변환
+
+Markdown 변환은 Graph API나 PowerShell을 사용하지 않으며 macOS·Linux의 fish에서 실행할 수 있습니다. Python 3 표준 라이브러리만 사용합니다.
+
+```fish
+./scripts/convert.fish
+```
+
+이미 생성한 변환본을 다시 만들려면:
+
+```fish
+./scripts/convert.fish --replace
+```
+
+- `.local-config/markdown.json`에 허용된 노트북 ID만 변환하며 나머지는 기본 거부합니다.
+- 섹션 그룹·섹션·하위 페이지를 실제 폴더 계층으로 생성합니다.
+- `--`로 시작한 이름은 `_old/`로 이동하고 `status: old`, `rag_priority: fallback`을 기록합니다.
+- OneNote에서 코드 블록 대신 사용한 1×1 표는 fenced code block으로 변환합니다.
+- 이미지와 첨부파일은 페이지 옆 `.assets/`에 복사하고 상대 링크로 연결합니다.
+- 결과와 OneNote ID 매핑은 `output/markdown/_meta/`에 기록합니다.
+
 ## 자유 배치와 주석
 
 `layout.json`은 절대 위치 요소의 태그, OneNote ID, 좌표, 크기와 HTML 내 위치를 기록합니다. 단어 옆에 배치한 해설처럼 공간 관계가 의미를 가지는 페이지를 찾는 근거로 사용합니다.
