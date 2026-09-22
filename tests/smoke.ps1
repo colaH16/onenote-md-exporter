@@ -14,6 +14,20 @@ function Assert-Equal {
     }
 }
 
+$ambiguousInterpolationPattern = '\$[A-Za-z_][A-Za-z0-9_]*[^\x00-\x7F]'
+$ambiguousInterpolations = @(
+    foreach ($sourceFile in @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot '..') -Recurse -File -Include '*.ps1', '*.psm1')) {
+        $lineNumber = 0
+        foreach ($line in [System.IO.File]::ReadLines($sourceFile.FullName)) {
+            $lineNumber++
+            if ($line -match $ambiguousInterpolationPattern) {
+                "{0}:{1}: {2}" -f $sourceFile.FullName, $lineNumber, $line.Trim()
+            }
+        }
+    }
+)
+Assert-Equal 0 $ambiguousInterpolations.Count ("한글과 붙은 모호한 변수 보간이 있습니다:`n" + ($ambiguousInterpolations -join "`n"))
+
 Assert-Equal 'a-b-c' (ConvertTo-SafeName -Name 'a/b:c') '파일명 금지 문자를 치환해야 합니다.'
 Assert-Equal 'untitled' (ConvertTo-SafeName -Name '   ') '빈 제목은 fallback을 사용해야 합니다.'
 Assert-Equal 10 ((Get-StableId -Value 'same input').Length) '안정 ID 길이가 잘못됐습니다.'

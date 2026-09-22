@@ -523,7 +523,7 @@ function Invoke-ArchiveRepair {
         exit 2
     }
 
-    Write-Host "불완전한 페이지 $($verification.incompletePages)개 중 $repairableCount개만 다시 받습니다."
+    Write-Host "불완전한 페이지 $($verification.incompletePages)개 중 ${repairableCount}개만 다시 받습니다."
     Connect-OneNoteGraph
     $result = Repair-OneNoteArchive -OutputRoot $outputRoot
     $reportPath = Join-Path $outputRoot 'repair-report.json'
