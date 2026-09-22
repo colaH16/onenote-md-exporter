@@ -1040,7 +1040,23 @@ function Repair-OneNoteArchive {
                 (Get-Item -LiteralPath $pageMetadataPath).Length -gt 0) {
                 try {
                     $page = Get-Content -LiteralPath $pageMetadataPath -Raw -Encoding utf8 | ConvertFrom-Json
-                    if (-not $page.id) {
+                    $requiredPageProperties = @(
+                        'id',
+                        'title',
+                        'createdDateTime',
+                        'lastModifiedDateTime',
+                        'level',
+                        'order',
+                        'links'
+                    )
+                    $hasRequiredPageProperties = $true
+                    foreach ($propertyName in $requiredPageProperties) {
+                        if ($null -eq $page.PSObject.Properties[$propertyName]) {
+                            $hasRequiredPageProperties = $false
+                            break
+                        }
+                    }
+                    if (-not $hasRequiredPageProperties -or -not $page.id) {
                         $page = $null
                     }
                 }

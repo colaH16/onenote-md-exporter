@@ -11,9 +11,10 @@ jobs:
   smoke:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Run PowerShell smoke tests
         shell: pwsh
         run: ./tests/smoke.ps1
       - name: Run Markdown converter tests
+        if: ${{ always() }}
         run: python3 -m unittest tests/test_markdown_converter.py
