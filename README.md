@@ -51,6 +51,7 @@ pwsh ./onenote-export.ps1 list
 최초 로그인 이후에는 같은 OS 사용자로 실행하는 한 저장된 로그인을 사용합니다. 권한을 지우고 다시 로그인하려면 다음을 실행합니다.
 
 ```fish
+pwsh ./onenote-export.ps1 login
 pwsh ./onenote-export.ps1 logout
 ```
 
@@ -177,6 +178,7 @@ Markdown 변환 단계에서는 가까운 블록과 정렬 관계를 이용해 �
 ## 보안
 
 - Graph 권한은 `Notes.Read`만 사용합니다.
+- `login`은 인증 모듈 로드, 저장된 컨텍스트 확인, 필요 시 기기 로그인의 각 단계를 화면에 표시합니다.
 - 로그인 컨텍스트는 Microsoft Graph PowerShell의 `CurrentUser` 캐시에 보관되며 `logout`으로 삭제할 수 있습니다.
 - 페이지 본문이나 토큰을 별도 로그에 남기지 않습니다.
 - `output/`, `.local-config/`, 기존 `config.local.json`은 커밋하지 않습니다.

@@ -111,23 +111,33 @@ function Connect-OneNoteGraph {
     [CmdletBinding()]
     param()
 
-    if (-not (Get-Module -ListAvailable -Name Microsoft.Graph.Authentication)) {
-        throw 'Microsoft.Graph.Authentication 모듈이 없습니다. 먼저 ./scripts/setup.fish를 실행하세요.'
+    Write-Host '[auth 1/3] Microsoft Graph 인증 모듈을 불러옵니다.'
+    try {
+        Import-Module Microsoft.Graph.Authentication -ErrorAction Stop
+    }
+    catch {
+        throw "Microsoft.Graph.Authentication 모듈을 불러오지 못했습니다. 먼저 ./scripts/setup.fish를 실행하세요.`n$($_.Exception.Message)"
     }
 
-    Import-Module Microsoft.Graph.Authentication -ErrorAction Stop
+    Write-Host '[auth 2/3] 저장된 로그인 컨텍스트를 확인합니다.'
     $context = Get-MgContext -ErrorAction SilentlyContinue
     if ($null -ne $context -and $context.Account -and @($context.Scopes) -contains 'Notes.Read') {
-        Write-Host "저장된 Microsoft Graph 로그인 사용: $($context.Account)"
+        Write-Host "[auth 3/3] 저장된 Microsoft Graph 로그인 사용: $($context.Account)"
         return
     }
 
+    Write-Host '[auth 3/3] 저장된 로그인이 없습니다. 기기 로그인 코드를 요청합니다.'
     Connect-MgGraph `
         -TenantId consumers `
         -Scopes 'Notes.Read' `
         -UseDeviceCode `
         -ContextScope CurrentUser `
         -NoWelcome
+    $connectedContext = Get-MgContext -ErrorAction SilentlyContinue
+    if ($null -eq $connectedContext -or -not $connectedContext.Account) {
+        throw 'Microsoft Graph 로그인 컨텍스트를 확인하지 못했습니다.'
+    }
+    Write-Host "Microsoft Graph 로그인 완료: $($connectedContext.Account)"
 }
 
 function Disconnect-OneNoteGraph {
@@ -601,7 +611,8 @@ function Export-OneNotePage {
     param(
         [Parameter(Mandatory)] $Page,
         [Parameter(Mandatory)][string] $ArchiveSectionPath,
-        [switch] $Force
+        [switch] $Force,
+        [switch] $ShowProgress
     )
 
     $pageStableId = Get-StableId -Value ([string] $Page.id)
@@ -649,6 +660,9 @@ function Export-OneNotePage {
     New-Item -ItemType Directory -Path $archivePagePath, $assetsPath -Force | Out-Null
     $encodedPageId = [uri]::EscapeDataString([string] $Page.id)
     $contentUri = "$script:GraphRoot/pages/$encodedPageId/content?includeIDs=true"
+    if ($ShowProgress) {
+        Write-Host '  [download] 페이지 HTML'
+    }
     Invoke-OneNoteGraphRequest -Uri $contentUri -OutputFilePath $rawHtmlPath
 
     $html = Get-Content -LiteralPath $rawHtmlPath -Raw -Encoding utf8
@@ -658,8 +672,10 @@ function Export-OneNotePage {
     $needsVisualReview = [bool] $layout.needsVisualReview -or $externalMediaReferences.Count -gt 0
     $resourceMetadata = [System.Collections.Generic.List[object]]::new()
     $usedNames = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $resourceNumber = 0
 
     foreach ($resource in $resources) {
+        $resourceNumber++
         $fileName = [string] $resource.FileName
         if (-not $usedNames.Add($fileName)) {
             $baseName = [System.IO.Path]::GetFileNameWithoutExtension($fileName)
@@ -672,6 +688,9 @@ function Export-OneNotePage {
         $encodedResourceId = [uri]::EscapeDataString([string] $resource.ResourceId)
         $resourceUri = "$script:GraphRoot/resources/$encodedResourceId/`$value"
         $resourcePath = Join-Path $assetsPath $fileName
+        if ($ShowProgress) {
+            Write-Host "  [download] 리소스 $resourceNumber/$($resources.Count): $fileName"
+        }
         Invoke-OneNoteGraphRequest -Uri $resourceUri -OutputFilePath $resourcePath
         $integrity = Get-FileIntegrity -Path $resourcePath
         $resourceMetadata.Add([ordered]@{
@@ -905,11 +924,15 @@ function Repair-OneNoteArchive {
         $pageDirectory = Join-Path $archiveRoot ([string] $issue.path)
         $sectionDirectory = Split-Path -Parent $pageDirectory
         try {
+            $displayTitle = if ($issue.title) { $issue.title } else { '(제목 확인 불가)' }
+            Write-Host "`n[repair] $displayTitle"
+            Write-Host '  [download] 페이지 메타데이터'
             $page = Get-OneNotePage -PageId ([string] $issue.pageId)
             $result = Export-OneNotePage `
                 -Page $page `
                 -ArchiveSectionPath $sectionDirectory `
-                -Force
+                -Force `
+                -ShowProgress
 
             foreach ($partFile in @(Get-ChildItem -LiteralPath $pageDirectory -Recurse -File -Filter '*.part')) {
                 Remove-Item -LiteralPath $partFile.FullName -Force
