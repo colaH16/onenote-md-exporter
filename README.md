@@ -179,6 +179,8 @@ Markdown 변환은 Graph API나 PowerShell을 사용하지 않으며 macOS·Linu
 ./scripts/convert.fish --replace
 ```
 
+`--replace`는 `output/markdown/`에서 직접 수정한 제목 계층과 본문도 다시 생성합니다. 수동 편집을 유지하려면 실행 전에 해당 파일을 백업하거나 `.local-config/curation.json`에 수정 사항을 반영하세요. SilverBullet에 동기화하기 전에도 변경 내용을 비교하세요.
+
 - `.local-config/markdown.json`에 허용된 노트북 ID만 변환하며 나머지는 기본 거부합니다.
 - 섹션 그룹·섹션·하위 페이지를 실제 폴더 계층으로 생성합니다.
 - `--`로 시작한 이름은 `_old/`로 이동하고 `status: old`, `rag_priority: fallback`을 기록합니다.
