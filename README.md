@@ -217,8 +217,9 @@ Markdown 변환은 Graph API나 PowerShell을 사용하지 않으며 macOS·Linu
 `_meta/internal-link-report.json`에 기록됩니다. 잘못된 override 경로나 출력 밖을
 가리키는 경로는 조용히 무시하지 않고 변환을 중단합니다.
 
-명령과 설명이 한 문단에 섞였거나 heredoc 종료를 확정할 수 없는 경우 원문을 임의로
-바꾸지 않습니다. 확인할 후보는 `_meta/shell-review.md`와
+명령과 설명이 한 문단에 섞인 경우에도 내용 전체를 `text` 코드 블록으로 보존합니다.
+OneNote 개체 구분 문자도 코드 블록 안에서는 줄바꿈으로 복원합니다. heredoc 종료처럼
+코드 블록의 범위를 확정할 수 없는 예외만 `_meta/shell-review.md`와
 `_meta/shell-review.json`에 기록됩니다.
 
 macOS에서 받은 아카이브를 Linux에서 변환할 때는 `output/`과 함께 다음 로컬 설정을 옮깁니다.

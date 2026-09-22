@@ -383,6 +383,8 @@ def shell_prompt_body(value: str) -> str:
 
 def obvious_shell_command(value: str) -> bool:
     """Recognize command-only lines while rejecting headings and explanatory prose."""
+    if "\uFFFC" in value:
+        return False
     had_prompt = bool(re.match(r"^(?:(?:\$|#)\s+|#(?=sudo\b))", value.strip()))
     line = shell_prompt_body(value)
     if not line or line.startswith("#"):
@@ -653,8 +655,19 @@ class MarkdownRenderer:
         if argument == "=":
             return False
         has_syntax = bool(re.search(r"(?:^|\s)(?:--?\w|[/~$][^\s]*|[^\s]+\.[A-Za-z0-9]+)|[|<>]", line))
-        has_prose = any(marker in f" {line} " for marker in SHELL_PROSE_MARKERS) or "또는" in line
+        has_prose = (
+            "\uFFFC" in value
+            or any(marker in f" {line} " for marker in SHELL_PROSE_MARKERS)
+            or "또는" in line
+        )
         return has_syntax and has_prose
+
+    @staticmethod
+    def _mixed_shell_text(value: str) -> str:
+        """Preserve command-plus-explanation paragraphs as readable literal text."""
+        value = value.replace("\r\n", "\n").replace("\r", "\n")
+        value = re.sub(r"\uFFFC+", "\n", value)
+        return re.sub(r"\n{3,}", "\n\n", value).strip()
 
     @staticmethod
     def _heredoc_terminator(value: str, delimiter: str) -> tuple[str, bool]:
@@ -827,7 +840,10 @@ class MarkdownRenderer:
                 continue
 
             if line and self._ambiguous_shell_candidate(line):
-                self._shell_review("명령과 설명이 한 문단에 섞여 있어 자동 변환하지 않음", line)
+                parts.append(fenced_code(self._mixed_shell_text(line), "text") + "\n\n")
+                self.shell_code_blocks += 1
+                index += 1
+                continue
 
             if isinstance(child, HtmlNode) and child.tag in BLOCK_TAGS:
                 parts.append(self.render_block(child))
@@ -1909,7 +1925,7 @@ class Converter:
             ]),
             "# OneNote 셸 명령 수동 검토 목록",
             "",
-            f"명령과 설명의 경계가 모호해 원문 형태로 둔 {len(self.shell_reviews)}건입니다.",
+            f"코드 블록으로 안전하게 자동 변환하지 못한 {len(self.shell_reviews)}건입니다.",
             "여러 열 표 안의 내용은 표 구조를 보존하기 위해 이 목록에도 넣지 않습니다.",
             "",
         ]

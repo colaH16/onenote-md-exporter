@@ -159,6 +159,33 @@ class MarkdownRendererTests(unittest.TestCase):
         self.assertNotIn("`sudo dnf install jq`", markdown)
         self.assertEqual(0, renderer.inline_shell_commands)
 
+    def test_command_with_explanation_becomes_text_code_block(self) -> None:
+        renderer = MarkdownRenderer("Page.assets")
+        markdown, _ = renderer.render_document(
+            "<html><body><div><p>firewall-cmd --list-all 명령으로 masquerade yes 확인</p>"
+            "</div></body></html>"
+        )
+        self.assertEqual(
+            "```text\nfirewall-cmd --list-all 명령으로 masquerade yes 확인\n```",
+            markdown,
+        )
+        self.assertEqual(1, renderer.shell_code_blocks)
+        self.assertEqual([], renderer.shell_reviews)
+
+    def test_mixed_command_object_markers_become_code_block_line_breaks(self) -> None:
+        renderer = MarkdownRenderer("Page.assets")
+        markdown, _ = renderer.render_document(
+            "<html><body><div><p>pveceph osd create &lt;dev&gt; [OPTIONS]￼￼Create OSD￼"
+            "--db_dev &lt;string&gt;￼Block device name for block.db.</p></div></body></html>"
+        )
+        self.assertIn(
+            "```text\npveceph osd create <dev> [OPTIONS]\nCreate OSD\n--db_dev <string>\n"
+            "Block device name for block.db.\n```",
+            markdown,
+        )
+        self.assertNotIn("￼", markdown)
+        self.assertEqual([], renderer.shell_reviews)
+
     def test_file_uri_is_not_treated_as_a_relative_asset(self) -> None:
         renderer = MarkdownRenderer("Page.assets")
         self.assertTrue(renderer.rewrite_url(r"file:///\\server\share").startswith("file:///"))
