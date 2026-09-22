@@ -14,6 +14,7 @@ from onenote_to_markdown import (  # noqa: E402
     build_page_tree,
     current_name,
     is_old_name,
+    unlocalized_onenote_resource_ids,
 )
 
 
@@ -39,6 +40,35 @@ class MarkdownRendererTests(unittest.TestCase):
     def test_file_uri_is_not_treated_as_a_relative_asset(self) -> None:
         renderer = MarkdownRenderer("Page.assets")
         self.assertTrue(renderer.rewrite_url(r"file:///\\server\share").startswith("file:///"))
+
+    def test_side_block_creates_stable_review_record_and_anchor(self) -> None:
+        source = """
+        <html><body>
+          <div style="position:absolute;top:100px;left:100px;width:300px"><p>Main concept</p></div>
+          <div style="position:absolute;top:120px;left:420px;width:180px"><p>Side explanation</p></div>
+        </body></html>
+        """
+        renderer = MarkdownRenderer("Page.assets", review_id_prefix="example")
+        markdown, count = renderer.render_document(source)
+        self.assertEqual(1, count)
+        self.assertEqual(1, len(renderer.layout_reviews))
+        self.assertEqual("example-01", renderer.layout_reviews[0]["reviewId"])
+        self.assertIn('<a id="layout-review-example-01"></a>', markdown)
+        self.assertEqual(
+            "Main concept",
+            renderer.layout_reviews[0]["candidateTarget"]["markdown"],
+        )
+        self.assertEqual(
+            "Side explanation",
+            renderer.layout_reviews[0]["annotation"]["markdown"],
+        )
+
+    def test_unlocalized_onenote_resource_url_is_detected(self) -> None:
+        source = (
+            '<img src="https://graph.microsoft.com/v1.0/users(\'person@example.com\')/onenote/'
+            'resources/resource-id/$value" />'
+        )
+        self.assertEqual({"resource-id"}, unlocalized_onenote_resource_ids(source))
 
 
 class HierarchyTests(unittest.TestCase):
@@ -142,10 +172,29 @@ class AllowlistTests(unittest.TestCase):
             report = json.loads((project / "output/markdown/_meta/conversion-report.json").read_text())
             self.assertEqual(0, report["stats"]["incompleteArchivePages"])
             self.assertEqual(1, report["stats"]["reconciledArchivePages"])
+            review_report = json.loads((project / "output/markdown/_meta/layout-review.json").read_text())
+            self.assertEqual(0, review_report["count"])
+            self.assertTrue((project / "output/markdown/_meta/layout-review.md").is_file())
             markdown = (project / "output/markdown/Notebook/Section/Page.md").read_text()
             self.assertIn('archive_status: "complete"', markdown)
             self.assertIn('source_archive_status: "incomplete"', markdown)
             self.assertNotIn("OneNote 아카이브 일부 누락", markdown)
+
+            (page / "page.local.html").write_text(
+                '<html><body><img src="https://graph.microsoft.com/v1.0/me/onenote/'
+                'resources/missed-image/$value" /></body></html>',
+                encoding="utf-8",
+            )
+            Converter(project, config, replace=True).convert()
+            second_report = json.loads(
+                (project / "output/markdown/_meta/conversion-report.json").read_text()
+            )
+            self.assertEqual(1, second_report["stats"]["incompleteArchivePages"])
+            self.assertEqual(1, second_report["stats"]["unlocalizedResourcePages"])
+            self.assertEqual(1, second_report["stats"]["unlocalizedResources"])
+            second_markdown = (project / "output/markdown/Notebook/Section/Page.md").read_text()
+            self.assertIn('archive_status: "incomplete"', second_markdown)
+            self.assertIn("OneNote 원격 리소스 URL 1개", second_markdown)
 
 
 if __name__ == "__main__":

@@ -74,6 +74,10 @@ MONOSPACE_FONTS = ("consolas", "courier", "menlo", "monaco", "monospace", "d2cod
 INVALID_PATH_CHARS = re.compile(r'[\x00-\x1f<>:"/\\|?*]')
 ARCHIVE_ID_SUFFIX = re.compile(r"--[0-9a-f]{8}$", re.IGNORECASE)
 OLD_PREFIX = re.compile(r"^--+")
+ONENOTE_RESOURCE_URL = re.compile(
+    r'https://graph\.microsoft\.com/[^"\s<>]*/onenote/resources/([^/?#"\s<>]+)/\$value',
+    re.IGNORECASE,
+)
 
 
 @dataclass
@@ -228,9 +232,29 @@ def markdown_uri(path: str) -> str:
     return urllib.parse.quote(path.replace(os.sep, "/"), safe="/._-~")
 
 
+def review_excerpt(value: str, maximum: int = 1200) -> str:
+    """Keep review reports readable without losing the nearby Markdown shape."""
+    value = normalize_markdown(value)
+    if len(value) <= maximum:
+        return value
+    return value[:maximum].rstrip() + "\n…"
+
+
+def unlocalized_onenote_resource_ids(value: str) -> set[str]:
+    return {urllib.parse.unquote(match.group(1)) for match in ONENOTE_RESOURCE_URL.finditer(value)}
+
+
+def fenced_text(value: str) -> str:
+    longest = max((len(match.group(0)) for match in re.finditer(r"`+", value)), default=0)
+    fence = "`" * max(3, longest + 1)
+    return f"{fence}text\n{value or '(빈 블록)'}\n{fence}"
+
+
 class MarkdownRenderer:
-    def __init__(self, asset_prefix: str) -> None:
+    def __init__(self, asset_prefix: str, review_id_prefix: str = "page") -> None:
         self.asset_prefix = asset_prefix.rstrip("/")
+        self.review_id_prefix = review_id_prefix
+        self.layout_reviews: list[dict[str, object]] = []
 
     def rewrite_url(self, value: str) -> str:
         value = html.unescape(value.strip())
@@ -467,6 +491,7 @@ class MarkdownRenderer:
         notes = 0
         parts: list[str] = []
         previous_position: tuple[float, float, float | None] | None = None
+        previous_rendered = ""
         for child, position in positioned:
             rendered = normalize_markdown(self.render_block(child))
             if not rendered:
@@ -482,12 +507,30 @@ class MarkdownRenderer:
                 parts.append(f"<!-- onenote-position: top={top:g} left={left:g} width={width if width is not None else 'unknown'} -->")
             if annotation:
                 notes += 1
+                review_id = f"{self.review_id_prefix}-{notes:02d}"
+                self.layout_reviews.append({
+                    "reviewId": review_id,
+                    "candidateTarget": {
+                        "top": previous_position[0],
+                        "left": previous_position[1],
+                        "width": previous_position[2],
+                        "markdown": review_excerpt(previous_rendered),
+                    },
+                    "annotation": {
+                        "top": position[0],
+                        "left": position[1],
+                        "width": position[2],
+                        "markdown": review_excerpt(rendered),
+                    },
+                })
+                parts.append(f'<a id="layout-review-{review_id}"></a>')
                 quoted = "\n".join("> " + line if line else ">" for line in rendered.splitlines())
                 parts.append("> [!note] OneNote 자유 배치 메모\n" + quoted)
             else:
                 parts.append(rendered)
             if position is not None:
                 previous_position = position
+                previous_rendered = rendered
         if not children:
             parts.append(self.render_children(body))
         return normalize_markdown("\n\n".join(parts)), notes
@@ -577,6 +620,7 @@ class Converter:
         self.allocator = NameAllocator()
         self.warnings: list[str] = []
         self.mapping: list[dict[str, object]] = []
+        self.layout_reviews: list[dict[str, object]] = []
         self.stats: dict[str, int] = {
             "notebooks": 0,
             "sections": 0,
@@ -586,6 +630,8 @@ class Converter:
             "layoutNotes": 0,
             "incompleteArchivePages": 0,
             "reconciledArchivePages": 0,
+            "unlocalizedResourcePages": 0,
+            "unlocalizedResources": 0,
             "assets": 0,
             "assetBytes": 0,
         }
@@ -665,8 +711,10 @@ class Converter:
         if not local_html_path.is_file():
             self.warnings.append(f"missing page.local.html: {page.source_dir}")
             return
-        renderer = MarkdownRenderer(asset_prefix)
-        body, layout_note_count = renderer.render_document(local_html_path.read_text(encoding="utf-8", errors="replace"))
+        local_html = local_html_path.read_text(encoding="utf-8", errors="replace")
+        unlocalized_resources = unlocalized_onenote_resource_ids(local_html)
+        renderer = MarkdownRenderer(asset_prefix, review_id_prefix=stable_short(page.page_id, 12))
+        body, layout_note_count = renderer.render_document(local_html)
         assets, asset_bytes = self.copy_assets(page.source_dir, asset_dir)
         if assets == 0 and asset_dir.exists():
             asset_dir.rmdir()
@@ -685,6 +733,8 @@ class Converter:
         archive_status = source_archive_status
         if source_archive_status != "complete" and failed_resources and not unresolved_failed_resources:
             archive_status = "complete"
+        if unlocalized_resources:
+            archive_status = "incomplete"
         needs_visual_review = bool(page.metadata.get("needsVisualReview"))
         header = front_matter([
             ("title", page.title),
@@ -699,15 +749,26 @@ class Converter:
             ("needs_visual_review", needs_visual_review),
             ("archive_status", archive_status),
             ("source_archive_status", source_archive_status),
+            ("unlocalized_onenote_resources", len(unlocalized_resources)),
             ("onenote_level", page.level),
             ("onenote_order", page.order),
         ])
         content_parts = [header, f"# {page.title}\n"]
-        if archive_status != "complete" or unresolved_failed_resources:
+        if archive_status != "complete" or unresolved_failed_resources or unlocalized_resources:
+            missing_details = []
+            if unresolved_failed_resources:
+                missing_details.append(
+                    "받지 못한 파일: "
+                    + ", ".join(str(resource.get("fileName") or "unknown") for resource in unresolved_failed_resources)
+                )
+            if unlocalized_resources:
+                missing_details.append(
+                    f"로컬 HTML에 OneNote 원격 리소스 URL {len(unlocalized_resources)}개가 남아 있음"
+                )
             content_parts.append(
                 "> [!warning] OneNote 아카이브 일부 누락\n"
-                "> 본문은 변환했지만 다음 리소스를 원본 아카이브에서 받지 못했습니다: "
-                + ", ".join(str(resource.get("fileName") or "unknown") for resource in unresolved_failed_resources)
+                "> 본문은 변환했지만 리소스 검사가 필요합니다: "
+                + "; ".join(missing_details or ["아카이브 상태가 incomplete임"])
                 + "\n"
             )
         if body:
@@ -726,8 +787,11 @@ class Converter:
             self.stats["visualReviewPages"] += 1
         if archive_status != "complete" or unresolved_failed_resources:
             self.stats["incompleteArchivePages"] += 1
-        if source_archive_status != archive_status:
+        if source_archive_status != "complete" and archive_status == "complete":
             self.stats["reconciledArchivePages"] += 1
+        if unlocalized_resources:
+            self.stats["unlocalizedResourcePages"] += 1
+            self.stats["unlocalizedResources"] += len(unlocalized_resources)
         self.mapping.append({
             "pageId": page.page_id,
             "notebookId": notebook_id,
@@ -738,7 +802,21 @@ class Converter:
             "ragPriority": "fallback" if old else "normal",
             "archiveStatus": archive_status,
             "sourceArchiveStatus": source_archive_status,
+            "unlocalizedOneNoteResources": len(unlocalized_resources),
         })
+        for review in renderer.layout_reviews:
+            self.layout_reviews.append({
+                "reviewId": review["reviewId"],
+                "status": "pending",
+                "pageId": page.page_id,
+                "notebookId": notebook_id,
+                "notebook": notebook_name,
+                "section": section_name,
+                "title": page.title,
+                "markdown": relative_markdown.as_posix(),
+                "candidateTarget": review["candidateTarget"],
+                "annotation": review["annotation"],
+            })
 
         for child in page.children:
             self.write_page(
@@ -796,6 +874,55 @@ class Converter:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
 
+    def write_layout_review_reports(self, meta_dir: Path) -> None:
+        payload = {
+            "schemaVersion": 1,
+            "generatedAt": datetime.now(timezone.utc).isoformat(),
+            "count": len(self.layout_reviews),
+            "reviews": self.layout_reviews,
+        }
+        (meta_dir / "layout-review.json").write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+
+        lines = [
+            "# OneNote 자유 배치 우선 검토 목록",
+            "",
+            f"자동 변환기가 옆 블록을 주석으로 해석한 {len(self.layout_reviews)}건입니다.",
+            "이 목록은 의미가 맞는지 확인하기 위한 것이며, `needs_visual_review` 전체 목록과는 다릅니다.",
+            "",
+        ]
+        for number, review in enumerate(self.layout_reviews, start=1):
+            target = review["candidateTarget"]
+            annotation = review["annotation"]
+            page_link = "../" + str(review["markdown"])
+            anchor = f"#layout-review-{review['reviewId']}"
+            lines.extend([
+                f"## {number}. [{review['title']}]({markdown_uri(page_link)}{anchor})",
+                "",
+                f"- 상태: 미확인",
+                f"- 검토 ID: `{review['reviewId']}`",
+                f"- 노트북 / 섹션: `{review['notebook']}` / `{review['section']}`",
+                (
+                    "- 앞 블록 위치: "
+                    f"top={target['top']}, left={target['left']}, width={target['width'] or 'unknown'}"
+                ),
+                (
+                    "- 주석 후보 위치: "
+                    f"top={annotation['top']}, left={annotation['left']}, width={annotation['width'] or 'unknown'}"
+                ),
+                "",
+                "### 연결 대상으로 추정한 앞 블록",
+                "",
+                fenced_text(str(target["markdown"])),
+                "",
+                "### 주석으로 변환한 옆 블록",
+                "",
+                fenced_text(str(annotation["markdown"])),
+                "",
+            ])
+        (meta_dir / "layout-review.md").write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+
     def convert(self) -> Path:
         notebooks = self.discover_notebooks()
         self.output_root.parent.mkdir(parents=True, exist_ok=True)
@@ -849,6 +976,7 @@ class Converter:
             (meta_dir / "onenote-id-map.json").write_text(
                 json.dumps(self.mapping, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
             )
+            self.write_layout_review_reports(meta_dir)
             report = {
                 "schemaVersion": 1,
                 "convertedAt": datetime.now(timezone.utc).isoformat(),
@@ -904,6 +1032,10 @@ def main(argv: list[str] | None = None) -> int:
     print(f"- old pages: {converter.stats['oldPages']}")
     print(f"- visual review: {converter.stats['visualReviewPages']}")
     print(f"- incomplete archives converted with warnings: {converter.stats['incompleteArchivePages']}")
+    print(
+        "- unlocalized OneNote resources: "
+        f"{converter.stats['unlocalizedResources']} in {converter.stats['unlocalizedResourcePages']} pages"
+    )
     print(f"- assets: {converter.stats['assets']} ({converter.stats['assetBytes']} bytes)")
     print(f"- warnings: {len(converter.warnings)}")
     return 0

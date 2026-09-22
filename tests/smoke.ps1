@@ -72,6 +72,31 @@ $externalReferences = @(& $archiveModule {
 } $sampleHtml)
 Assert-Equal 1 $externalReferences.Count '외부 iframe 참조를 기록해야 합니다.'
 
+$quotedGreaterHtml = @'
+<html><body>
+  <img alt="value > threshold"
+       style="position:absolute;top:10px;left:20px"
+       src="https://graph.microsoft.com/v1.0/users('person@example.com')/onenote/resources/quoted-greater/$value"
+       data-src-type="image/png" />
+</body></html>
+'@
+$quotedGreaterResources = @(& $archiveModule {
+    param($Html)
+    Get-OneNoteHtmlResources -Html $Html
+} $quotedGreaterHtml)
+Assert-Equal 1 $quotedGreaterResources.Count '속성 값의 > 문자 뒤에 있는 OneNote 리소스도 찾아야 합니다.'
+Assert-Equal 'quoted-greater' $quotedGreaterResources[0].ResourceId '인용 속성 뒤의 리소스 ID가 잘못됐습니다.'
+$quotedGreaterLayout = & $archiveModule {
+    param($Html)
+    Get-OneNoteLayout -Html $Html
+} $quotedGreaterHtml
+Assert-Equal 1 $quotedGreaterLayout.absoluteBlockCount '속성 값의 > 문자가 절대 배치 태그 파싱을 중단하면 안 됩니다.'
+$unlocalizedIds = @(& $archiveModule {
+    param($Html)
+    Get-UnlocalizedOneNoteResourceIds -Html $Html
+} $quotedGreaterHtml)
+Assert-Equal 1 $unlocalizedIds.Count 'page.local.html에 남은 OneNote 리소스를 찾아야 합니다.'
+
 $throttleStatus = 0
 try {
     throw [System.Exception]::new('HTTP request failed: TooManyRequests, OneNote error 20166')
@@ -292,6 +317,18 @@ try {
     })
     [System.IO.File]::WriteAllBytes((Join-Path $completeAssets 'image.bin'), [byte[]](1, 2, 3))
 
+    $unlocalizedPageId = 'unlocalized-page-id'
+    $unlocalizedPage = Join-Path $verifySection (Get-StableId -Value $unlocalizedPageId)
+    New-Item -ItemType Directory -Path $unlocalizedPage -Force | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $unlocalizedPage 'page.raw.html'), $quotedGreaterHtml)
+    [System.IO.File]::WriteAllText((Join-Path $unlocalizedPage 'page.local.html'), $quotedGreaterHtml)
+    Write-JsonFile -Path (Join-Path $unlocalizedPage 'layout.json') -Value ([ordered]@{ absoluteBlockCount = 1 })
+    Write-JsonFile -Path (Join-Path $unlocalizedPage 'page.json') -Value ([ordered]@{
+        id = $unlocalizedPageId
+        title = 'Unlocalized page'
+        resources = @()
+    })
+
     $incompletePageId = 'incomplete-page-id'
     $incompletePage = Join-Path $verifySection (Get-StableId -Value $incompletePageId)
     $incompleteAssets = Join-Path $incompletePage 'assets'
@@ -310,14 +347,17 @@ try {
 
     $verification = Test-OneNoteArchive -OutputRoot $verifyOutput
     Assert-Equal 0 $verification.apiRequests '로컬 검증은 API를 호출하지 않아야 합니다.'
-    Assert-Equal 3 $verification.pagesChecked '모든 페이지 디렉터리를 검사해야 합니다.'
+    Assert-Equal 4 $verification.pagesChecked '모든 페이지 디렉터리를 검사해야 합니다.'
     Assert-Equal 1 $verification.completePages '완전한 페이지 수가 잘못됐습니다.'
-    Assert-Equal 2 $verification.incompletePages '불완전한 페이지 수가 잘못됐습니다.'
+    Assert-Equal 3 $verification.incompletePages '불완전한 페이지 수가 잘못됐습니다.'
     $knownIncomplete = @($verification.issues | Where-Object title -eq 'Incomplete page')
     Assert-Equal 1 $knownIncomplete.Count 'manifest에서 실패한 페이지 제목을 찾아야 합니다.'
     Assert-Equal $incompletePageId $knownIncomplete[0].pageId 'manifest에서 복구할 페이지 ID를 찾아야 합니다.'
     Assert-Equal $true (@($knownIncomplete[0].missingFiles) -contains 'layout.json') '누락된 layout.json을 찾아야 합니다.'
     Assert-Equal 1 @($knownIncomplete[0].partFiles).Count '남은 .part 파일을 찾아야 합니다.'
+    $unlocalizedIssue = @($verification.issues | Where-Object title -eq 'Unlocalized page')
+    Assert-Equal 1 $unlocalizedIssue.Count '원격 OneNote 리소스가 남은 페이지를 불완전으로 판정해야 합니다.'
+    Assert-Equal 1 @($unlocalizedIssue[0].missingResources).Count '남은 원격 OneNote 리소스를 보고해야 합니다.'
 
     $repairResult = & $archiveModule {
         param($OutputRoot, $Html)
@@ -354,7 +394,7 @@ try {
 
         Repair-OneNoteArchive -OutputRoot $OutputRoot
     } $verifyOutput $sampleHtml
-    Assert-Equal 1 $repairResult.repairedPages '복구 가능한 페이지만 다시 받아야 합니다.'
+    Assert-Equal 2 $repairResult.repairedPages '복구 가능한 페이지만 다시 받아야 합니다.'
     Assert-Equal 0 $repairResult.failedPages '대상 페이지 복구가 실패했습니다.'
     Assert-Equal 1 $repairResult.unrepairablePages 'ID가 없는 빈 디렉터리는 자동 복구 불가로 남겨야 합니다.'
     Assert-Equal 1 $repairResult.remainingIncompletePages '복구 후 남은 불완전 페이지 수가 잘못됐습니다.'

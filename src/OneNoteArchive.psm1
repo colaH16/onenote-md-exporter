@@ -421,7 +421,11 @@ function Get-OneNoteLayout {
 
     $blocks = [System.Collections.Generic.List[object]]::new()
     $options = [System.Text.RegularExpressions.RegexOptions]::IgnoreCase
-    foreach ($match in [regex]::Matches($Html, '<(?<tag>div|img|object)\b[^>]*>', $options)) {
+    # A OneNote alt/title attribute can contain literal `>` characters. A simple
+    # `[^>]*` tag matcher stops inside the quoted attribute and silently misses
+    # the resource URL and style that follow it.
+    $tagPattern = '<(?<tag>div|img|object)\b(?:[^>"'']|"[^"]*"|''[^'']*'')*>'
+    foreach ($match in [regex]::Matches($Html, $tagPattern, $options)) {
         $tagHtml = $match.Value
         $style = Get-HtmlAttribute -Tag $tagHtml -Name 'style'
         if (-not $style -or $style -notmatch 'position\s*:\s*absolute') {
@@ -493,7 +497,8 @@ function Get-OneNoteHtmlResources {
     $imageNumber = 0
     $options = [System.Text.RegularExpressions.RegexOptions]::IgnoreCase
 
-    foreach ($match in [regex]::Matches($Html, '<img\b[^>]*>', $options)) {
+    $imagePattern = '<img\b(?:[^>"'']|"[^"]*"|''[^'']*'')*>'
+    foreach ($match in [regex]::Matches($Html, $imagePattern, $options)) {
         $tag = $match.Value
         $fullUrl = Get-HtmlAttribute -Tag $tag -Name 'data-fullres-src'
         $displayUrl = Get-HtmlAttribute -Tag $tag -Name 'src'
@@ -517,7 +522,8 @@ function Get-OneNoteHtmlResources {
         })
     }
 
-    foreach ($match in [regex]::Matches($Html, '<object\b[^>]*>', $options)) {
+    $objectPattern = '<object\b(?:[^>"'']|"[^"]*"|''[^'']*'')*>'
+    foreach ($match in [regex]::Matches($Html, $objectPattern, $options)) {
         $tag = $match.Value
         $url = Get-HtmlAttribute -Tag $tag -Name 'data'
         $resourceId = Get-ResourceIdFromUrl -Url $url
@@ -549,7 +555,8 @@ function Get-ExternalMediaReferences {
     $references = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
     $options = [System.Text.RegularExpressions.RegexOptions]::IgnoreCase
 
-    foreach ($match in [regex]::Matches($Html, '<img\b[^>]*>', $options)) {
+    $imagePattern = '<img\b(?:[^>"'']|"[^"]*"|''[^'']*'')*>'
+    foreach ($match in [regex]::Matches($Html, $imagePattern, $options)) {
         $tag = $match.Value
         $url = Get-HtmlAttribute -Tag $tag -Name 'data-fullres-src'
         if (-not $url) {
@@ -560,14 +567,16 @@ function Get-ExternalMediaReferences {
         }
     }
 
-    foreach ($match in [regex]::Matches($Html, '<iframe\b[^>]*>', $options)) {
+    $iframePattern = '<iframe\b(?:[^>"'']|"[^"]*"|''[^'']*'')*>'
+    foreach ($match in [regex]::Matches($Html, $iframePattern, $options)) {
         $url = Get-HtmlAttribute -Tag $match.Value -Name 'src'
         if ($url -match '^https?://') {
             [void] $references.Add($url)
         }
     }
 
-    foreach ($match in [regex]::Matches($Html, '<object\b[^>]*>', $options)) {
+    $objectPattern = '<object\b(?:[^>"'']|"[^"]*"|''[^'']*'')*>'
+    foreach ($match in [regex]::Matches($Html, $objectPattern, $options)) {
         $url = Get-HtmlAttribute -Tag $match.Value -Name 'data'
         if ($url -match '^https?://' -and -not (Get-ResourceIdFromUrl -Url $url)) {
             [void] $references.Add($url)
@@ -575,6 +584,22 @@ function Get-ExternalMediaReferences {
     }
 
     return @($references | Sort-Object)
+}
+
+function Get-UnlocalizedOneNoteResourceIds {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string] $Html)
+
+    $resourceIds = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    $pattern = 'https://graph\.microsoft\.com/[^"\s<>]*/onenote/resources/(?<id>[^/?#"\s<>]+)/\$value'
+    foreach ($match in [regex]::Matches(
+        $Html,
+        $pattern,
+        [System.Text.RegularExpressions.RegexOptions]::IgnoreCase
+    )) {
+        [void] $resourceIds.Add([uri]::UnescapeDataString($match.Groups['id'].Value))
+    }
+    return @($resourceIds | Sort-Object)
 }
 
 function Convert-HtmlResourceUrls {
@@ -614,40 +639,50 @@ function Export-OneNotePage {
     $rawHtmlPath = Join-Path $archivePagePath 'page.raw.html'
     $localHtmlPath = Join-Path $archivePagePath 'page.local.html'
     $assetsPath = Join-Path $archivePagePath 'assets'
+    $existing = $null
+
+    if ((Test-Path -LiteralPath $metadataPath -PathType Leaf) -and
+        (Get-Item -LiteralPath $metadataPath).Length -gt 0) {
+        try {
+            $existing = Get-Content -LiteralPath $metadataPath -Raw -Encoding utf8 | ConvertFrom-Json
+        }
+        catch {
+            Write-Warning "기존 메타데이터를 읽지 못해 다시 받습니다: $metadataPath"
+        }
+    }
 
     if (-not $Force -and
+        $null -ne $existing -and
         (Test-Path -LiteralPath $metadataPath) -and
         (Test-Path -LiteralPath $layoutPath) -and
         (Test-Path -LiteralPath $rawHtmlPath) -and
         (Test-Path -LiteralPath $localHtmlPath)) {
-        try {
-            $existing = Get-Content -LiteralPath $metadataPath -Raw -Encoding utf8 | ConvertFrom-Json
-            $existingArchiveIncomplete = $null -ne $existing.PSObject.Properties['archiveStatus'] -and
-                $existing.archiveStatus -eq 'incomplete'
-            if ($existing.lastModifiedDateTime -eq $Page.lastModifiedDateTime -and -not $existingArchiveIncomplete) {
-                $existingNeedsReview = if ($null -ne $existing.PSObject.Properties['needsVisualReview']) {
-                    [bool] $existing.needsVisualReview
-                }
-                else {
-                    [bool] $existing.layout.needsVisualReview
-                }
-                $existingExternalCount = if ($null -ne $existing.PSObject.Properties['externalMediaReferences']) {
-                    @($existing.externalMediaReferences).Count
-                }
-                else {
-                    0
-                }
-                return [pscustomobject]@{
-                    Status = 'skipped'
-                    ResourceCount = @($existing.resources).Count
-                    AttachmentCount = @($existing.resources | Where-Object kind -eq 'attachment').Count
-                    ExternalMediaReferenceCount = $existingExternalCount
-                    NeedsVisualReview = $existingNeedsReview
-                }
+        $existingArchiveIncomplete = $null -ne $existing.PSObject.Properties['archiveStatus'] -and
+            $existing.archiveStatus -eq 'incomplete'
+        $existingLocalHtml = Get-Content -LiteralPath $localHtmlPath -Raw -Encoding utf8
+        $existingUnlocalizedResources = @(Get-UnlocalizedOneNoteResourceIds -Html $existingLocalHtml)
+        if ($existing.lastModifiedDateTime -eq $Page.lastModifiedDateTime -and
+            -not $existingArchiveIncomplete -and
+            $existingUnlocalizedResources.Count -eq 0) {
+            $existingNeedsReview = if ($null -ne $existing.PSObject.Properties['needsVisualReview']) {
+                [bool] $existing.needsVisualReview
             }
-        }
-        catch {
-            Write-Warning "기존 메타데이터를 읽지 못해 다시 받습니다: $metadataPath"
+            else {
+                [bool] $existing.layout.needsVisualReview
+            }
+            $existingExternalCount = if ($null -ne $existing.PSObject.Properties['externalMediaReferences']) {
+                @($existing.externalMediaReferences).Count
+            }
+            else {
+                0
+            }
+            return [pscustomobject]@{
+                Status = 'skipped'
+                ResourceCount = @($existing.resources).Count
+                AttachmentCount = @($existing.resources | Where-Object kind -eq 'attachment').Count
+                ExternalMediaReferenceCount = $existingExternalCount
+                NeedsVisualReview = $existingNeedsReview
+            }
         }
     }
 
@@ -667,12 +702,31 @@ function Export-OneNotePage {
     $resourceMetadata = [System.Collections.Generic.List[object]]::new()
     $failedResources = [System.Collections.Generic.List[object]]::new()
     $usedNames = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $existingResourcesById = @{}
+    if ($null -ne $existing -and $null -ne $existing.PSObject.Properties['resources']) {
+        foreach ($existingResource in @($existing.resources)) {
+            $idProperty = $existingResource.PSObject.Properties['id']
+            $fileNameProperty = $existingResource.PSObject.Properties['fileName']
+            if ($null -eq $idProperty -or -not $idProperty.Value -or
+                $null -eq $fileNameProperty -or -not $fileNameProperty.Value) {
+                continue
+            }
+            $existingResourcesById[[string] $idProperty.Value] = $existingResource
+            [void] $usedNames.Add([string] $fileNameProperty.Value)
+        }
+    }
     $resourceNumber = 0
 
     foreach ($resource in $resources) {
         $resourceNumber++
-        $fileName = [string] $resource.FileName
-        if (-not $usedNames.Add($fileName)) {
+        $existingResource = $existingResourcesById[[string] $resource.ResourceId]
+        $fileName = if ($null -ne $existingResource) {
+            [string] $existingResource.fileName
+        }
+        else {
+            [string] $resource.FileName
+        }
+        if ($null -eq $existingResource -and -not $usedNames.Add($fileName)) {
             $baseName = [System.IO.Path]::GetFileNameWithoutExtension($fileName)
             $extension = [System.IO.Path]::GetExtension($fileName)
             $fileName = "$baseName-$(Get-StableId -Value $resource.ResourceId -Length 8)$extension"
@@ -892,6 +946,18 @@ function Test-OneNoteArchive {
                             $missingResources.Add("$($fileNameProperty.Value) (빈 파일)")
                         }
                     }
+                }
+            }
+
+            $localHtmlPath = Join-Path $pageDirectory.FullName 'page.local.html'
+            if ((Test-Path -LiteralPath $localHtmlPath -PathType Leaf) -and
+                (Get-Item -LiteralPath $localHtmlPath).Length -gt 0) {
+                $localHtml = Get-Content -LiteralPath $localHtmlPath -Raw -Encoding utf8
+                $unlocalizedResourceIds = @(Get-UnlocalizedOneNoteResourceIds -Html $localHtml)
+                if ($unlocalizedResourceIds.Count -gt 0) {
+                    $missingResources.Add(
+                        "page.local.html에 원격 OneNote 리소스 URL $($unlocalizedResourceIds.Count)개가 남아 있음"
+                    )
                 }
             }
 

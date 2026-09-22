@@ -146,7 +146,7 @@ pwsh ./onenote-export.ps1 export -RequestIntervalSeconds 10
 pwsh ./onenote-export.ps1 verify
 ```
 
-이 명령은 Microsoft Graph에 로그인하거나 API를 호출하지 않습니다. 각 페이지의 `page.raw.html`, `page.local.html`, `layout.json`, `page.json` 존재 여부와 빈 파일·잘못된 JSON·누락된 리소스·남은 `.part` 파일을 로컬에서만 확인합니다. 결과는 화면과 `output/verify-report.json`에 기록되며, 불완전한 페이지가 있으면 종료 코드 `2`를 반환합니다.
+이 명령은 Microsoft Graph에 로그인하거나 API를 호출하지 않습니다. 각 페이지의 `page.raw.html`, `page.local.html`, `layout.json`, `page.json` 존재 여부와 빈 파일·잘못된 JSON·누락된 리소스·로컬 HTML에 남은 OneNote 원격 리소스 URL·남은 `.part` 파일을 로컬에서만 확인합니다. 결과는 화면과 `output/verify-report.json`에 기록되며, 불완전한 페이지가 있으면 종료 코드 `2`를 반환합니다.
 
 다른 출력 경로를 검사하려면:
 

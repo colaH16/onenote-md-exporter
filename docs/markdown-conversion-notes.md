@@ -26,10 +26,20 @@
 - 셀이 하나뿐인 표는 내용을 추측하지 않고 Markdown fenced code block으로 변환합니다.
 - 여러 행·여러 열의 표는 일반 Markdown 표로 변환합니다.
 
+## 자유 배치 검토
+
+- 여러 자유 배치 블록이나 펜 입력이 있는 페이지는 `needs_visual_review: true`로 표시합니다.
+- 옆에 놓인 짧은 블록을 주석으로 해석한 항목은 `output/markdown/_meta/layout-review.md`에 우선 검토 목록으로 생성합니다.
+- 검토 목록에는 변환된 페이지의 해당 위치로 가는 링크, 원래 좌표, 연결 대상으로 추정한 앞 블록과 주석 후보가 포함됩니다.
+- 기계적 변환 완료와 사람의 의미 검수 완료는 구분합니다. 검토 목록이 남아 있는 동안 해당 해석은 확정본으로 간주하지 않습니다.
+- 검토 목록과 실제 노트 이름은 `output/` 아래에만 생성하며 공개 Git 저장소에 올리지 않습니다.
+
 ## 수동 보완한 리소스
 
 - `page.json`에 다운로드 실패로 남아 있어도 `assets/`에 같은 이름의 비어 있지 않은 파일을 수동으로 넣었다면 변환본에서는 완료로 판정합니다.
 - 원본 `page.json`의 상태는 `source_archive_status`로, 실제 파일을 확인한 변환 상태는 `archive_status`로 별도 기록합니다.
+- `page.local.html`에 Microsoft Graph의 OneNote 리소스 URL이 하나라도 남아 있으면 로컬화되지 않은 자산이므로 incomplete로 판정합니다.
+- 이 경우 Markdown에 경고를 넣고 `unlocalized_onenote_resources`에 남은 리소스 수를 기록합니다.
 
 ## `--`로 시작하는 이름
 
