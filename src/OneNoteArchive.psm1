@@ -145,7 +145,9 @@ function Connect-OneNoteGraph {
             -NoWelcome
         $connectedContext = Get-MgContext -ErrorAction SilentlyContinue
         if ($null -eq $connectedContext -or -not $connectedContext.Account) {
-            throw 'CurrentUser와 Process 방식 모두에서 Microsoft Graph 로그인 컨텍스트를 확인하지 못했습니다.'
+            Write-Warning 'Graph SDK가 로그인 컨텍스트를 반환하지 않았습니다. 인증 명령은 정상 종료되었으며, 실제 OneNote 요청으로 인증을 확인합니다.'
+            Write-Warning '이 로그인은 현재 pwsh 실행에서만 유효합니다. export나 repair를 실행한 명령 안에서는 끝까지 유지됩니다.'
+            return
         }
         Write-Warning '이 로그인은 현재 pwsh 실행에서만 유효합니다. export나 repair를 실행한 명령 안에서는 끝까지 유지됩니다.'
     }
