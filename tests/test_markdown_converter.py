@@ -197,5 +197,86 @@ class AllowlistTests(unittest.TestCase):
             self.assertIn("OneNote 원격 리소스 URL 1개", second_markdown)
 
 
+class CurationTests(unittest.TestCase):
+    def make_project(self, temporary: str, curation: dict) -> tuple[Path, Path]:
+        project = Path(temporary)
+        notebook = project / "output/archive/Notebook"
+        section = notebook / "Section"
+        page = section / "page-id"
+        page.mkdir(parents=True)
+        (notebook / "notebook.json").write_text(
+            json.dumps({"id": "allowed-id", "displayName": "Notebook"}), encoding="utf-8"
+        )
+        (section / "section.json").write_text(
+            json.dumps({"id": "section-id", "displayName": "Section"}), encoding="utf-8"
+        )
+        (page / "page.local.html").write_text(
+            """<html><body>
+            <div style="position:absolute;top:100px;left:50px;width:300px"><p>Main procedure</p></div>
+            <div style="position:absolute;top:100px;left:700px;width:300px"><p>Old attempt</p></div>
+            </body></html>""",
+            encoding="utf-8",
+        )
+        (page / "page.raw.html").write_text("<html></html>", encoding="utf-8")
+        (page / "layout.json").write_text("{}", encoding="utf-8")
+        (page / "page.json").write_text(
+            json.dumps({
+                "id": "page-id",
+                "title": "Page",
+                "level": 0,
+                "order": 0,
+                "archiveStatus": "complete",
+                "needsVisualReview": True,
+                "resources": [],
+            }),
+            encoding="utf-8",
+        )
+        config_dir = project / ".local-config"
+        config_dir.mkdir()
+        curation_path = config_dir / "curation.json"
+        curation_path.write_text(
+            json.dumps({"schemaVersion": 1, "pages": {"page-id": curation}}), encoding="utf-8"
+        )
+        config = config_dir / "markdown.json"
+        config.write_text(
+            json.dumps({
+                "sourceArchiveRoot": "./output/archive",
+                "outputRoot": "./output/markdown",
+                "curationFile": "./.local-config/curation.json",
+                "notebooks": [{"id": "allowed-id", "name": "Notebook"}],
+            }),
+            encoding="utf-8",
+        )
+        return project, config
+
+    def test_curation_reorders_blocks_and_resolves_visual_review(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            project, config = self.make_project(temporary, {
+                "resolved": True,
+                "layout": [
+                    {"type": "block", "block": "100,700", "heading": "## Reference"},
+                    {"type": "block", "block": "100,50", "heading": "## Procedure"},
+                ],
+            })
+            Converter(project, config).convert()
+            markdown = (project / "output/markdown/Notebook/Section/Page.md").read_text(encoding="utf-8")
+            self.assertLess(markdown.index("Old attempt"), markdown.index("Main procedure"))
+            self.assertIn("needs_visual_review: false", markdown)
+            self.assertIn("layout_curated: true", markdown)
+            review = json.loads(
+                (project / "output/markdown/_meta/layout-review.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(0, review["count"])
+
+    def test_curation_rejects_unaccounted_source_block(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            project, config = self.make_project(temporary, {
+                "resolved": True,
+                "layout": [{"type": "block", "block": "100,50"}],
+            })
+            with self.assertRaisesRegex(RuntimeError, "unaccounted"):
+                Converter(project, config).convert()
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "pages": {
+    "example-onenote-page-id": {
+      "resolved": true,
+      "layout": [
+        {
+          "type": "block",
+          "block": "100,50",
+          "heading": "## Main procedure"
+        },
+        {
+          "type": "blocks",
+          "blocks": ["100,700"],
+          "heading": "## Previous attempts",
+          "history": true
+        }
+      ]
+    }
+  }
+}

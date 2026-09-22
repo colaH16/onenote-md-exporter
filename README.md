@@ -83,6 +83,7 @@ pwsh ./onenote-export.ps1 init-conversion
 .local-config/
 ├── export.json       # 원본 백업 대상
 ├── markdown.json     # Markdown·SilverBullet·RAG 허용 대상
+├── curation.json     # 자유 배치 검토 후 확정한 비공개 재배치 규칙
 └── POLICY.md         # 포함·제외 목록과 로컬 개인정보 정책
 ```
 
@@ -184,6 +185,18 @@ Markdown 변환은 Graph API나 PowerShell을 사용하지 않으며 macOS·Linu
 - OneNote에서 코드 블록 대신 사용한 1×1 표는 fenced code block으로 변환합니다.
 - 이미지와 첨부파일은 페이지 옆 `.assets/`에 복사하고 상대 링크로 연결합니다.
 - 결과와 OneNote ID 매핑은 `output/markdown/_meta/`에 기록합니다.
+- `markdown.json`의 `curationFile`이 가리키는 비공개 교정 규칙이 있으면, 자유 배치 박스를 검토 완료된 순서와 형식으로 다시 구성합니다.
+- 교정 규칙이 원문의 박스를 빠뜨리거나 존재하지 않는 좌표를 가리키면 변환을 중단합니다. 조용히 내용을 버리지 않습니다.
+
+macOS에서 받은 아카이브를 Linux에서 변환할 때는 `output/`과 함께 다음 로컬 설정을 옮깁니다.
+
+```text
+.local-config/
+├── markdown.json
+└── curation.json
+```
+
+`curation.json`에는 OneNote 페이지 ID와 개인 문서 구조가 들어갈 수 있으므로 `output/`과 마찬가지로 공개 Git에 커밋하지 않습니다. `--replace`는 `output/markdown/`만 교체하며 `.local-config/curation.json`은 건드리지 않습니다.
 
 ## 자유 배치와 주석
 
@@ -197,6 +210,8 @@ Markdown 변환 단계에서는 가까운 블록과 정렬 관계를 이용해 �
 - 원문 바로 아래의 강조 블록
 
 판단이 애매한 페이지는 자동 확정하지 않고 시각 검토 대상으로 남깁니다.
+
+검토가 끝난 페이지는 `curation.json`에서 원본 박스 좌표를 명시해 순서를 정합니다. 결과 문서에는 `layout_curated: true`, `needs_visual_review: false`가 기록됩니다. 여러 줄 설정을 가로로 비교해야 하는 표는 SilverBullet의 HTML-in-Markdown 지원을 이용해 `<table>`과 `<pre><code>`로 생성합니다.
 
 ## 보안
 

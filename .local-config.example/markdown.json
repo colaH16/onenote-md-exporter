@@ -2,6 +2,7 @@
   "schemaVersion": 1,
   "sourceArchiveRoot": "./output/archive",
   "outputRoot": "./output/markdown",
+  "curationFile": "./.local-config/curation.json",
   "notebooks": [
     {
       "id": "allowed-onenote-notebook-id",

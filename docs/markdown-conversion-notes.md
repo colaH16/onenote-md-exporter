@@ -9,6 +9,7 @@
 - 백업 범위는 `.local-config/export.json`의 `notebooks`를 확인합니다.
 - Markdown·SilverBullet·RAG 변환 허용 범위는 `.local-config/markdown.json`의 `notebooks`만 확인합니다.
 - 백업 전용 및 제외 사유는 `.local-config/POLICY.md`를 확인합니다.
+- 검토 완료한 자유 배치 재구성은 `.local-config/curation.json`만 확인합니다.
 - `markdown.json`에 ID가 명시되지 않은 노트북은 기본 거부(default deny)하며 Markdown으로 변환하지 않습니다.
 - 백업용 `export.json`의 선택 목록을 변환 허용 목록으로 재사용하지 않습니다.
 - `_old/` 및 `rag_priority: fallback` 규칙은 `markdown.json`에 허용된 노트북 내부의 과거 문서에만 적용합니다. 백업 전용 노트북을 `_old/`로 우회 수록하지 않습니다.
@@ -33,6 +34,16 @@
 - 검토 목록에는 변환된 페이지의 해당 위치로 가는 링크, 원래 좌표, 연결 대상으로 추정한 앞 블록과 주석 후보가 포함됩니다.
 - 기계적 변환 완료와 사람의 의미 검수 완료는 구분합니다. 검토 목록이 남아 있는 동안 해당 해석은 확정본으로 간주하지 않습니다.
 - 검토 목록과 실제 노트 이름은 `output/` 아래에만 생성하며 공개 Git 저장소에 올리지 않습니다.
+
+## 검토 완료 페이지의 교정 규칙
+
+- 실제 페이지 ID, 제목과 본문 구조를 포함할 수 있는 `curation.json`은 `.local-config/`에 두고 Git에서 제외합니다.
+- 각 원본 박스는 `top,left` 좌표 키로 참조합니다. 교정 규칙은 모든 박스를 배치하거나, 중복 등의 명시적 사유와 함께 `discard`해야 합니다.
+- 참조 좌표가 사라졌거나 처리하지 않은 박스가 생기면 변환을 실패시킵니다. OneNote 원문이 바뀌었는데 예전 교정본을 무심코 적용하지 않습니다.
+- 현재 절차와 이전 시도가 한 페이지에 섞인 경우 이전 절 앞에 `<!-- rag-priority: fallback -->`을 기록합니다. 이후 RAG 청킹 단계는 이 표식을 기준으로 해당 절을 후순위 청크로 분리해야 합니다.
+- 여러 줄 설정의 가로 비교는 일반 Markdown 표보다 `<table><pre><code>` 조합을 사용합니다. 코드 줄바꿈은 HTML 문자 참조로 보존합니다.
+- 교정 완료 페이지에는 `layout_curated: true`, `needs_visual_review: false`를 기록하고 자유 배치 우선 검토 목록에서 제외합니다.
+- 다른 머신에서 재변환하려면 `output/`과 `.local-config/markdown.json`, `.local-config/curation.json`을 함께 복사합니다.
 
 ## 수동 보완한 리소스
 

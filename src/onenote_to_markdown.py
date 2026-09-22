@@ -99,6 +99,17 @@ class HtmlNode:
             yield from child.descendants(tag)
 
 
+@dataclass
+class RenderedBlock:
+    """A top-level OneNote canvas block before layout interpretation."""
+
+    key: str
+    node: HtmlNode
+    markdown: str
+    literal: str
+    position: tuple[float, float, float | None] | None
+
+
 class OneNoteHtmlParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
@@ -480,28 +491,54 @@ class MarkdownRenderer:
             return None
         return top, left, width
 
-    def render_document(self, source: str) -> tuple[str, int]:
+    @staticmethod
+    def position_key(position: tuple[float, float, float | None] | None, index: int) -> str:
+        if position is None:
+            return f"flow:{index}"
+        top, left, _ = position
+        return f"{top:g},{left:g}"
+
+    def parse_blocks(self, source: str) -> list[RenderedBlock]:
         parser = OneNoteHtmlParser()
         parser.feed(source)
         body = next(parser.root.descendants("body"), parser.root)
         children = [child for child in body.children if isinstance(child, HtmlNode) and child.tag not in SKIP_TAGS]
-        positioned = [(child, self._position(child)) for child in children]
-        if children and all(position is not None for _, position in positioned):
-            positioned.sort(key=lambda item: (item[1][0], item[1][1]))  # type: ignore[index]
+        positioned = [(index, child, self._position(child)) for index, child in enumerate(children)]
+        if children and all(position is not None for _, _, position in positioned):
+            positioned.sort(key=lambda item: (item[2][0], item[2][1]))  # type: ignore[index]
+        blocks: list[RenderedBlock] = []
+        for index, child, position in positioned:
+            rendered = normalize_markdown(self.render_block(child))
+            if not rendered:
+                continue
+            blocks.append(RenderedBlock(
+                key=self.position_key(position, index),
+                node=child,
+                markdown=rendered,
+                literal=node_literal_text(child),
+                position=position,
+            ))
+        if not children:
+            rendered = normalize_markdown(self.render_children(body))
+            if rendered:
+                blocks.append(RenderedBlock("flow:0", body, rendered, node_literal_text(body), None))
+        return blocks
+
+    def render_document(self, source: str) -> tuple[str, int]:
+        blocks = self.parse_blocks(source)
         notes = 0
         parts: list[str] = []
         previous_position: tuple[float, float, float | None] | None = None
         previous_rendered = ""
-        for child, position in positioned:
-            rendered = normalize_markdown(self.render_block(child))
-            if not rendered:
-                continue
+        for block in blocks:
+            position = block.position
+            rendered = block.markdown
             annotation = False
             if position is not None and previous_position is not None:
                 top, left, width = position
                 previous_top, previous_left, previous_width = previous_position
                 right_edge = previous_left + (previous_width or 300)
-                annotation = abs(top - previous_top) <= 90 and left >= right_edge - 20 and len(node_text(child)) <= 600
+                annotation = abs(top - previous_top) <= 90 and left >= right_edge - 20 and len(block.literal) <= 600
             if position is not None:
                 top, left, width = position
                 parts.append(f"<!-- onenote-position: top={top:g} left={left:g} width={width if width is not None else 'unknown'} -->")
@@ -531,8 +568,6 @@ class MarkdownRenderer:
             if position is not None:
                 previous_position = position
                 previous_rendered = rendered
-        if not children:
-            parts.append(self.render_children(body))
         return normalize_markdown("\n\n".join(parts)), notes
 
 
@@ -617,6 +652,22 @@ class Converter:
             raise RuntimeError("markdown allowlist is empty")
         self.source_root = self._resolve_config_path(str(self.config.get("sourceArchiveRoot") or "./output/archive"))
         self.output_root = self._resolve_config_path(str(self.config.get("outputRoot") or "./output/markdown"))
+        self.curation_path: Path | None = None
+        self.curations: dict[str, dict[str, object]] = {}
+        curation_value = self.config.get("curationFile")
+        if curation_value:
+            self.curation_path = self._resolve_config_path(str(curation_value))
+            if not self.curation_path.is_file():
+                raise RuntimeError(f"curation file does not exist: {self.curation_path}")
+            curation_payload = json.loads(self.curation_path.read_text(encoding="utf-8"))
+            pages = curation_payload.get("pages", {})
+            if not isinstance(pages, dict):
+                raise RuntimeError("curation pages must be an object keyed by OneNote page ID")
+            self.curations = {
+                str(page_id): value
+                for page_id, value in pages.items()
+                if isinstance(value, dict)
+            }
         self.allocator = NameAllocator()
         self.warnings: list[str] = []
         self.mapping: list[dict[str, object]] = []
@@ -670,6 +721,215 @@ class Converter:
             size += source.stat().st_size
         return count, size
 
+    @staticmethod
+    def _quote_callout(value: str, kind: str, title: str) -> str:
+        lines = [f"> [!{kind}] {title}"]
+        lines.extend("> " + line if line else ">" for line in value.splitlines())
+        return "\n".join(lines)
+
+    @staticmethod
+    def _block_map(blocks: list[RenderedBlock]) -> dict[str, RenderedBlock]:
+        result: dict[str, RenderedBlock] = {}
+        for block in blocks:
+            if block.key in result:
+                raise RuntimeError(f"duplicate OneNote layout coordinate: {block.key}")
+            result[block.key] = block
+        return result
+
+    @staticmethod
+    def _table_rows(table: HtmlNode) -> list[list[HtmlNode]]:
+        rows: list[list[HtmlNode]] = []
+        for row in table.descendants("tr"):
+            nearest_table = row.parent
+            while nearest_table is not None and nearest_table.tag != "table":
+                nearest_table = nearest_table.parent
+            if nearest_table is not table:
+                continue
+            cells = [child for child in row.child_nodes() if child.tag in {"th", "td"}]
+            if cells:
+                rows.append(cells)
+        return rows
+
+    def _table_cell_node(self, block: RenderedBlock, table_index: int, row: int, column: int) -> HtmlNode:
+        tables = ([block.node] if block.node.tag == "table" else []) + list(block.node.descendants("table"))
+        if table_index < 0 or table_index >= len(tables):
+            raise RuntimeError(f"table index out of range for block {block.key}: {table_index}")
+        rows = self._table_rows(tables[table_index])
+        if row < 0 or row >= len(rows) or column < 0 or column >= len(rows[row]):
+            raise RuntimeError(
+                f"table cell out of range for block {block.key}: table={table_index} row={row} column={column}"
+            )
+        return rows[row][column]
+
+    def _cell_value(
+        self,
+        cell: object,
+        block_map: dict[str, RenderedBlock],
+        renderer: MarkdownRenderer,
+        referenced: set[str],
+    ) -> tuple[str, bool]:
+        if isinstance(cell, str):
+            return cell, False
+        if not isinstance(cell, dict):
+            raise RuntimeError("curation table cell must be a string or object")
+        if "text" in cell:
+            return str(cell.get("text") or ""), bool(cell.get("code"))
+        key = str(cell.get("block") or "")
+        if key not in block_map:
+            raise RuntimeError(f"curation references missing block: {key}")
+        referenced.add(key)
+        block = block_map[key]
+        node = block.node
+        if "tableCell" in cell:
+            selector = cell["tableCell"]
+            if not isinstance(selector, dict):
+                raise RuntimeError("tableCell selector must be an object")
+            node = self._table_cell_node(
+                block,
+                int(selector.get("table", 0)),
+                int(selector.get("row", 0)),
+                int(selector.get("column", 0)),
+            )
+        mode = str(cell.get("mode") or "literal")
+        if mode == "markdown":
+            return normalize_markdown(renderer.render_children(node)), False
+        if mode != "literal":
+            raise RuntimeError(f"unsupported curation table cell mode: {mode}")
+        return node_literal_text(node), True
+
+    def _render_curated_block(self, block: RenderedBlock, item: dict[str, object]) -> str:
+        mode = str(item.get("mode") or "markdown")
+        if mode == "markdown":
+            value = block.markdown
+        elif mode == "code":
+            lines = block.literal.splitlines()
+            drop_lines = int(item.get("dropLeadingLines") or 0)
+            value = fenced_text("\n".join(lines[drop_lines:]).strip())
+        elif mode in {"note", "warning"}:
+            value = self._quote_callout(
+                block.markdown,
+                mode,
+                str(item.get("calloutTitle") or ("참고" if mode == "note" else "주의")),
+            )
+        else:
+            raise RuntimeError(f"unsupported curated block mode: {mode}")
+        heading = str(item.get("heading") or "").strip()
+        return f"{heading}\n\n{value}" if heading else value
+
+    def render_curated_body(
+        self,
+        renderer: MarkdownRenderer,
+        blocks: list[RenderedBlock],
+        curation: dict[str, object],
+        page_id: str,
+    ) -> str:
+        block_map = self._block_map(blocks)
+        referenced: set[str] = set()
+
+        for replacement in curation.get("replacements", []):
+            if not isinstance(replacement, dict):
+                raise RuntimeError(f"invalid replacement for curated page {page_id}")
+            key = str(replacement.get("block") or "")
+            if key not in block_map:
+                raise RuntimeError(f"curation replacement references missing block: {key}")
+            find = str(replacement.get("find") or "")
+            replace = str(replacement.get("replace") or "")
+            if not find or find not in block_map[key].markdown:
+                raise RuntimeError(f"curation replacement text not found in block {key} for page {page_id}")
+            block_map[key].markdown = block_map[key].markdown.replace(find, replace, 1)
+
+        for insertion in curation.get("insertions", []):
+            if not isinstance(insertion, dict):
+                raise RuntimeError(f"invalid insertion for curated page {page_id}")
+            target_key = str(insertion.get("target") or "")
+            source_key = str(insertion.get("source") or "")
+            if target_key not in block_map or source_key not in block_map:
+                raise RuntimeError(f"curation insertion references missing block for page {page_id}")
+            marker = str(insertion.get("after") or "")
+            target = block_map[target_key]
+            if not marker or marker not in target.markdown:
+                raise RuntimeError(f"curation insertion marker not found in block {target_key} for page {page_id}")
+            fragment = self._render_curated_block(block_map[source_key], insertion)
+            target.markdown = target.markdown.replace(marker, marker + "\n\n" + fragment, 1)
+            referenced.add(source_key)
+
+        parts: list[str] = []
+        layout = curation.get("layout", [])
+        if not isinstance(layout, list) or not layout:
+            raise RuntimeError(f"curated page has no layout: {page_id}")
+        for item in layout:
+            if not isinstance(item, dict):
+                raise RuntimeError(f"curation layout item must be an object: {page_id}")
+            item_type = str(item.get("type") or "block")
+            if item_type == "markdown":
+                parts.append(str(item.get("text") or ""))
+                continue
+            if item_type == "block":
+                key = str(item.get("block") or "")
+                if key not in block_map:
+                    raise RuntimeError(f"curation references missing block: {key}")
+                referenced.add(key)
+                parts.append(self._render_curated_block(block_map[key], item))
+                continue
+            if item_type == "blocks":
+                keys = [str(value) for value in item.get("blocks", [])]
+                missing = [key for key in keys if key not in block_map]
+                if missing:
+                    raise RuntimeError(f"curation references missing blocks: {', '.join(missing)}")
+                referenced.update(keys)
+                value = "\n\n".join(block_map[key].markdown for key in keys)
+                if item.get("history"):
+                    marker = str(item.get("historyMarker") or "이 아래 내용은 이전 시도 또는 실패 기록입니다.")
+                    value = f"<!-- rag-priority: fallback -->\n\n> [!warning] 히스토리\n> {marker}\n\n{value}"
+                heading = str(item.get("heading") or "").strip()
+                parts.append(f"{heading}\n\n{value}" if heading else value)
+                continue
+            if item_type == "table":
+                headers = [str(value) for value in item.get("headers", [])]
+                rows = item.get("rows", [])
+                if not isinstance(rows, list):
+                    raise RuntimeError(f"curation table rows must be a list: {page_id}")
+                lines = ["<table>"]
+                if headers:
+                    lines.extend(["<thead><tr>", *[f"<th>{html.escape(value)}</th>" for value in headers], "</tr></thead>"])
+                lines.append("<tbody>")
+                for row in rows:
+                    if not isinstance(row, list):
+                        raise RuntimeError(f"curation table row must be a list: {page_id}")
+                    lines.append("<tr>")
+                    for cell in row:
+                        value, code = self._cell_value(cell, block_map, renderer, referenced)
+                        colspan = int(cell.get("colspan", 1)) if isinstance(cell, dict) else 1
+                        colspan_attr = f' colspan="{colspan}"' if colspan > 1 else ""
+                        if code:
+                            encoded = html.escape(value).replace("\n", "&#10;")
+                            rendered = f"<pre><code>{encoded}</code></pre>"
+                        else:
+                            rendered = value
+                        lines.append(f"<td{colspan_attr}>{rendered}</td>")
+                    lines.append("</tr>")
+                lines.extend(["</tbody>", "</table>"])
+                heading = str(item.get("heading") or "").strip()
+                table_value = "\n".join(lines)
+                parts.append(f"{heading}\n\n{table_value}" if heading else table_value)
+                continue
+            raise RuntimeError(f"unsupported curation layout item type: {item_type}")
+
+        discarded = {
+            str(item.get("block"))
+            for item in curation.get("discard", [])
+            if isinstance(item, dict) and item.get("block")
+        }
+        unknown_discard = discarded - set(block_map)
+        if unknown_discard:
+            raise RuntimeError(f"curation discards missing blocks: {', '.join(sorted(unknown_discard))}")
+        unaccounted = set(block_map) - referenced - discarded
+        if unaccounted:
+            raise RuntimeError(
+                f"curation leaves OneNote blocks unaccounted for on page {page_id}: {', '.join(sorted(unaccounted))}"
+            )
+        return normalize_markdown("\n\n".join(parts))
+
     def write_page(
         self,
         page: PageEntry,
@@ -714,7 +974,13 @@ class Converter:
         local_html = local_html_path.read_text(encoding="utf-8", errors="replace")
         unlocalized_resources = unlocalized_onenote_resource_ids(local_html)
         renderer = MarkdownRenderer(asset_prefix, review_id_prefix=stable_short(page.page_id, 12))
-        body, layout_note_count = renderer.render_document(local_html)
+        curation = self.curations.get(page.page_id)
+        if curation:
+            blocks = renderer.parse_blocks(local_html)
+            body = self.render_curated_body(renderer, blocks, curation, page.page_id)
+            layout_note_count = 0
+        else:
+            body, layout_note_count = renderer.render_document(local_html)
         assets, asset_bytes = self.copy_assets(page.source_dir, asset_dir)
         if assets == 0 and asset_dir.exists():
             asset_dir.rmdir()
@@ -735,7 +1001,9 @@ class Converter:
             archive_status = "complete"
         if unlocalized_resources:
             archive_status = "incomplete"
-        needs_visual_review = bool(page.metadata.get("needsVisualReview"))
+        needs_visual_review = bool(page.metadata.get("needsVisualReview")) and not bool(
+            curation and curation.get("resolved", True)
+        )
         header = front_matter([
             ("title", page.title),
             ("onenote_id", page.page_id),
@@ -747,6 +1015,7 @@ class Converter:
             ("status", "old" if old else "current"),
             ("rag_priority", "fallback" if old else "normal"),
             ("needs_visual_review", needs_visual_review),
+            ("layout_curated", bool(curation)),
             ("archive_status", archive_status),
             ("source_archive_status", source_archive_status),
             ("unlocalized_onenote_resources", len(unlocalized_resources)),
@@ -803,6 +1072,7 @@ class Converter:
             "archiveStatus": archive_status,
             "sourceArchiveStatus": source_archive_status,
             "unlocalizedOneNoteResources": len(unlocalized_resources),
+            "layoutCurated": bool(curation),
         })
         for review in renderer.layout_reviews:
             self.layout_reviews.append({
