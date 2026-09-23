@@ -181,12 +181,20 @@ Markdown 변환은 Graph API나 PowerShell을 사용하지 않으며 macOS·Linu
 
 `--replace`는 `output/markdown/`에서 직접 수정한 제목 계층과 본문도 다시 생성합니다. 수동 편집을 유지하려면 실행 전에 해당 파일을 백업하거나 `.local-config/curation.json`에 수정 사항을 반영하세요. SilverBullet에 동기화하기 전에도 변경 내용을 비교하세요.
 
+이미 만든 문서를 재변환하지 않고 단독 줄의 인라인 코드만 코드 블록으로 바꾸려면 아래 도구를 씁니다. 기본은 변경 건수만 출력하는 미리보기이며, 적용할 때만 `--write`를 붙입니다. SilverBullet에 배치한 복사본도 해당 Markdown 폴더를 인자로 지정할 수 있습니다.
+
+```fish
+python3 scripts/promote-standalone-code.py output/markdown
+python3 scripts/promote-standalone-code.py --write output/markdown
+```
+
 - `.local-config/markdown.json`에 허용된 노트북 ID만 변환하며 나머지는 기본 거부합니다.
 - 섹션 그룹·섹션·하위 페이지를 실제 폴더 계층으로 생성합니다.
 - `--`로 시작한 이름은 `_old/`로 이동하고 `status: old`, `rag_priority: fallback`을 기록합니다.
 - OneNote에서 코드 블록 대신 사용한 1×1 표는 fenced code block으로 변환합니다.
-- 문단 하나인 명확한 셸 명령은 인라인 코드로, 연속 명령·heredoc·`\\` 연속행·셸 반복문은
-  `bash` 또는 `fish` fenced code block으로 변환합니다. heredoc 안의 `#` 주석은 Markdown 제목이 되지 않습니다.
+- 문단 하나인 명확한 셸 명령도 `bash` 또는 `fish` 코드 블록으로 변환합니다. 연속 명령·heredoc·`\\` 연속행·셸 반복문도
+  코드 블록으로 묶습니다. 문장 속 인라인 코드는 유지하고, 단독 줄인 코드는 복사 버튼이 있는 코드 블록으로 바꿉니다.
+  heredoc 안의 `#` 주석은 Markdown 제목이 되지 않습니다.
 - 여러 열 표의 명령은 표 구조와 가로 비교를 보존하기 위해 자동 코드 변환에서 제외합니다.
 - 이미지와 첨부파일은 페이지 옆 `.assets/`에 복사하고 상대 링크로 연결합니다.
 - OneNote 페이지·섹션 링크는 GUID를 대조해 SilverBullet 내부 페이지 링크로 바꿉니다.
@@ -254,11 +262,11 @@ macOS에서 받은 아카이브를 Linux에서 변환할 때는 `output/`과 함
 - 첨부 현황과 확장자별 개수는 `_meta/document-picker.md`에 생성됩니다.
 - 실제 태그별 페이지 수와 사용 안내는 `_meta/tag-guide.md`에 생성됩니다.
 
-코드 블록의 경계와 인라인 코드의 둥근 배경·여백은 SilverBullet space 루트의 `STYLES.md`에 있는
-`space-style` 블록으로 조정합니다. 예시는
+글자·여백 크기, 검색창과 결과 구분선, 코드 블록의 경계와 인라인 코드의 배경은 SilverBullet space 루트의
+`STYLES.md`에 있는 `space-style` 블록으로 조정합니다. 예시는
 [`examples/silverbullet-code-style.md`](examples/silverbullet-code-style.md)에 있습니다.
 이 파일은 `OneNote/markdown/` 밖에 두므로 변환 결과를 다시 동기화해도 유지됩니다.
-스타일 변경 후 브라우저에서 `System: Reload`를 실행합니다. CSS 변수는 SilverBullet
+스타일 변경 후 브라우저 줌을 100%로 돌리고 `System: Reload`를 실행합니다. CSS 변수는 SilverBullet
 클라이언트의 테마 변수이며 Kubernetes ConfigMap이나 컨테이너 환경 변수가 아닙니다.
 
 ## 자유 배치와 주석

@@ -369,14 +369,6 @@ def fenced_text(value: str) -> str:
     return fenced_code(value, "text")
 
 
-def inline_code(value: str) -> str:
-    value = value.strip()
-    longest = max((len(match.group(0)) for match in re.finditer(r"`+", value)), default=0)
-    fence = "`" * max(1, longest + 1)
-    padding = " " if "`" in value else ""
-    return f"{fence}{padding}{value}{padding}{fence}"
-
-
 def shell_prompt_body(value: str) -> str:
     return re.sub(r"^(?:(?:\$|#)\s+|#(?=sudo\b))", "", value.strip(), count=1)
 
@@ -433,6 +425,67 @@ def shell_language(values: Iterable[str]) -> str:
     ):
         return "fish"
     return "bash"
+
+
+def promote_standalone_inline_code(markdown: str) -> tuple[str, int]:
+    """Give code spans occupying a whole line a copyable fenced block.
+
+    Prose, list/table cells, front matter, and existing fenced blocks are left alone.
+    """
+    lines = markdown.splitlines(keepends=True)
+    if not lines:
+        return markdown, 0
+    frontmatter_end = None
+    if lines[0].lstrip("\ufeff").strip() == "---":
+        frontmatter_end = next(
+            (index for index, line in enumerate(lines[1:201], start=1) if line.strip() in {"---", "..."}),
+            None,
+        )
+
+    output: list[str] = []
+    promoted = 0
+    fence_character = ""
+    fence_length = 0
+    for index, raw_line in enumerate(lines):
+        line = raw_line.rstrip("\r\n")
+        ending = raw_line[len(line):]
+        if frontmatter_end is not None and index <= frontmatter_end:
+            output.append(raw_line)
+            continue
+
+        opener = re.match(r"^ {0,3}(`{3,}|~{3,})", line)
+        if fence_character:
+            output.append(raw_line)
+            if opener and opener.group(1)[0] == fence_character:
+                marker = opener.group(1)
+                if len(marker) >= fence_length and not line[opener.end():].strip():
+                    fence_character = ""
+                    fence_length = 0
+            continue
+        if opener:
+            fence_character = opener.group(1)[0]
+            fence_length = len(opener.group(1))
+            output.append(raw_line)
+            continue
+
+        match = re.fullmatch(r"(?P<ticks>`{1,2})(?P<code>.+)(?P=ticks)", line)
+        if not match:
+            output.append(raw_line)
+            continue
+        ticks = match.group("ticks")
+        code = match.group("code")
+        if ticks in code:
+            output.append(raw_line)
+            continue
+        if code.startswith(" ") and code.endswith(" ") and code.strip():
+            code = code[1:-1]
+        if not code.strip():
+            output.append(raw_line)
+            continue
+        language = shell_language([code]) if obvious_shell_command(code) else "text"
+        output.append(fenced_code(code, language).replace("\n", ending or "\n") + ending)
+        promoted += 1
+    return "".join(output), promoted
 
 
 class MarkdownRenderer:
@@ -830,12 +883,8 @@ class MarkdownRenderer:
                         break
                     command_lines.append(next_line)
                     cursor = self._next_significant(children, cursor + 1)
-                if len(command_lines) == 1:
-                    parts.append(inline_code(line) + "\n\n")
-                    self.inline_shell_commands += 1
-                else:
-                    parts.append(fenced_code("\n".join(command_lines), shell_language(command_lines)) + "\n\n")
-                    self.shell_code_blocks += 1
+                parts.append(fenced_code("\n".join(command_lines), shell_language(command_lines)) + "\n\n")
+                self.shell_code_blocks += 1
                 index = cursor
                 continue
 
@@ -927,6 +976,7 @@ class MarkdownRenderer:
         blocks: list[RenderedBlock] = []
         for index, child, position in positioned:
             rendered = normalize_markdown(self.render_block(child))
+            rendered, _ = promote_standalone_inline_code(rendered)
             if not rendered:
                 continue
             blocks.append(RenderedBlock(
@@ -1485,6 +1535,7 @@ class Converter:
             layout_note_count = 0
         else:
             body, layout_note_count = renderer.render_document(local_html)
+        body, _ = promote_standalone_inline_code(body)
         assets, asset_bytes, document_extensions = self.copy_assets(page.source_dir, asset_dir)
         if assets == 0 and asset_dir.exists():
             asset_dir.rmdir()

@@ -17,6 +17,7 @@ from onenote_to_markdown import (  # noqa: E402
     is_onenote_internal_url,
     is_old_name,
     onenote_link_ids,
+    promote_standalone_inline_code,
     silverbullet_relative_ref,
     tag_component,
     unlocalized_onenote_resource_ids,
@@ -72,11 +73,11 @@ class MarkdownRendererTests(unittest.TestCase):
         self.assertIn("kernel.panic_on_oops = 1\nEOF\n```", markdown)
         self.assertNotIn("￼", markdown)
 
-    def test_single_command_is_inline_and_adjacent_commands_are_fenced(self) -> None:
+    def test_single_and_adjacent_commands_are_fenced(self) -> None:
         single, _ = MarkdownRenderer("Page.assets").render_document(
             "<html><body><div><p>sudo dnf install jq</p></div></body></html>"
         )
-        self.assertEqual("`sudo dnf install jq`", single)
+        self.assertEqual("```bash\nsudo dnf install jq\n```", single)
 
         renderer = MarkdownRenderer("Page.assets")
         multiple, _ = renderer.render_document(
@@ -116,7 +117,7 @@ class MarkdownRendererTests(unittest.TestCase):
         markdown, _ = MarkdownRenderer("Page.assets").render_document(
             "<html><body><div><p># journalctl</p></div></body></html>"
         )
-        self.assertEqual("`# journalctl`", markdown)
+        self.assertEqual("```bash\n# journalctl\n```", markdown)
 
     def test_external_command_url_can_be_code_but_onenote_page_link_stays_a_link(self) -> None:
         external, _ = MarkdownRenderer("Page.assets").render_document(
@@ -124,7 +125,7 @@ class MarkdownRendererTests(unittest.TestCase):
             '<a href="https://example.com/package.rpm">https://example.com/package.rpm</a>'
             '</p></div></body></html>'
         )
-        self.assertEqual("`sudo dnf install https://example.com/package.rpm`", external)
+        self.assertEqual("```bash\nsudo dnf install https://example.com/package.rpm\n```", external)
 
         internal, _ = MarkdownRenderer("Page.assets").render_document(
             '<html><body><div><p><a href="onenote:#dnf%20update&amp;page-id='
@@ -137,10 +138,43 @@ class MarkdownRendererTests(unittest.TestCase):
             '<html><body><div><p>sudo dnf update</p><p><a href="onenote:#dnf%20update&amp;page-id='
             '%7B22222222-2222-2222-2222-222222222222%7D">dnf update</a></p></div></body></html>'
         )
-        self.assertIn("`sudo dnf update`", adjacent)
+        self.assertIn("```bash\nsudo dnf update\n```", adjacent)
         self.assertIn("[dnf update](onenote:", adjacent)
 
+    def test_standalone_code_is_fenced_but_prose_inline_code_stays_inline(self) -> None:
+        markdown, _ = MarkdownRenderer("Page.assets").render_document(
+            "<html><body><div><p><code>some_variable</code></p>"
+            "<p>설명 <code>some_variable</code> 뒤에 계속됩니다.</p></div></body></html>"
+        )
+        self.assertIn("```text\nsome_variable\n```", markdown)
+        self.assertIn("설명 `some_variable` 뒤에 계속됩니다.", markdown)
+
+    def test_existing_standalone_code_migration_preserves_other_markdown(self) -> None:
+        source = (
+            "---\nexample: `frontmatter`\n---\n"
+            "본문의 `inline` 코드는 유지\n\n"
+            "`kubectl get pods`\n\n"
+            "- `list item`\n"
+            "| `table cell` |\n\n"
+            "```text\n`already fenced`\n```\n\n"
+            "`` literal`tick ``\n"
+        )
+        converted, count = promote_standalone_inline_code(source)
+        self.assertEqual(2, count)
+        self.assertIn("```bash\nkubectl get pods\n```", converted)
+        self.assertIn("```text\nliteral`tick\n```", converted)
+        self.assertIn("본문의 `inline` 코드는 유지", converted)
+        self.assertIn("- `list item`", converted)
+        self.assertIn("| `table cell` |", converted)
+        self.assertIn("```text\n`already fenced`\n```", converted)
+        self.assertEqual((converted, 0), promote_standalone_inline_code(converted))
+
     def test_explicit_fish_commands_use_fish_fence(self) -> None:
+        single, _ = MarkdownRenderer("Page.assets").render_document(
+            "<html><body><div><p>set -gx EDITOR nvim</p></div></body></html>"
+        )
+        self.assertEqual("```fish\nset -gx EDITOR nvim\n```", single)
+
         renderer = MarkdownRenderer("Page.assets")
         markdown, _ = renderer.render_document(
             "<html><body><div><p>set -gx EDITOR nvim</p><p>set -gx PAGER less</p></div></body></html>"
