@@ -61,6 +61,46 @@ class MarkdownRendererTests(unittest.TestCase):
         self.assertNotIn("\n# 저장할 kernel 갯수\n\n", markdown)
         self.assertEqual(1, renderer.shell_code_blocks)
 
+    def test_nested_code_table_is_not_duplicated_or_pipe_escaped(self) -> None:
+        source = '''<table><tr><td><p># intro</p><table><tr><td>
+        <p># example</p><p>set disk demo</p><p>echo "$disk" | sort</p>
+        <p>sudo example --dry-run</p></td></tr></table></td></tr></table>'''
+        markdown, _ = MarkdownRenderer("assets").render_document(source)
+        self.assertEqual(markdown.count('echo "$disk" | sort'), 1)
+        self.assertIn("```fish\n", markdown)
+        self.assertNotIn("<br>", markdown)
+        self.assertNotIn("| --- |", markdown)
+        self.assertIn("```\n# intro\n```", markdown)
+
+    def test_multirow_single_column_script_is_fenced(self) -> None:
+        source = '<table><tr><td><p># code</p><p>sudo example --dry-run</p><p>echo $value</p></td></tr><tr><td></td></tr></table>'
+        markdown, _ = MarkdownRenderer("assets").render_document(source)
+        self.assertIn("```bash\n# code\nsudo example --dry-run\necho $value\n```", markdown)
+        self.assertNotIn("| ---", markdown)
+
+    def test_multirow_and_multicolumn_scripts_have_copyable_fences(self) -> None:
+        source = '''<table><tr><td><p># alpha</p><p>set value a</p>
+        <p>echo "$value"</p><p>sudo example --dry-run</p></td>
+        <td><p># beta</p><p>set value b</p><p>echo "$value"</p>
+        <p>sudo example --dry-run</p></td></tr><tr><td></td><td><p>reference</p></td></tr></table>'''
+        markdown, _ = MarkdownRenderer("assets").render_document(source)
+        self.assertEqual(markdown.count("```fish"), 2)
+        self.assertIn("표 1행 · 2열", markdown)
+        self.assertIn("reference", markdown)
+        self.assertNotIn("| ---", markdown)
+
+    def test_single_cell_preserves_br_indentation_and_backticks(self) -> None:
+        source = '<table><tr><td>echo $value<br>  echo `date`<br>```</td></tr></table>'
+        markdown, _ = MarkdownRenderer("assets").render_document(source)
+        self.assertIn("````bash\necho $value\n  echo `date`\n```\n````", markdown)
+        self.assertNotIn("\u200b", markdown)
+
+    def test_single_cell_keeps_image_and_link(self) -> None:
+        source = '<table><tr><td><p>reference</p><img src="assets/a.png"><a href="https://example.test/">link</a></td></tr></table>'
+        markdown, _ = MarkdownRenderer("page.assets").render_document(source)
+        self.assertIn("page.assets/a.png", markdown)
+        self.assertIn("https://example.test/", markdown)
+
     def test_heredoc_object_marker_before_terminator_is_split(self) -> None:
         source = """
         <html><body><div>

@@ -597,24 +597,102 @@ class MarkdownRenderer:
             return f"<sub>{content.strip()}</sub>"
         return self._apply_inline_style(node, content)
 
+    @staticmethod
+    def table_rows(node: HtmlNode) -> list[list[HtmlNode]]:
+        """Nested table rows belong to that table, never to its parent."""
+        rows = []
+        for row in node.descendants("tr"):
+            parent = row.parent
+            while parent is not None and parent.tag != "table":
+                parent = parent.parent
+            if parent is node:
+                cells = [child for child in row.child_nodes() if child.tag in {"th", "td"}]
+                if cells:
+                    rows.append(cells)
+        return rows
+
+    @staticmethod
+    def _cell_literal(node: HtmlNode) -> str:
+        # Preserve line boundaries and indentation without Markdown escaping.
+        def visit(item: HtmlNode | str, parent_tag: str = "") -> str:
+            if isinstance(item, str):
+                if not item.strip() and "\n" in item and parent_tag in {"td", "th", "tr", "table", "tbody", "div"}:
+                    return ""
+                return item.replace("\u00a0", " ")
+            if item.tag in SKIP_TAGS:
+                return ""
+            if item.tag == "br":
+                return "\n"
+            value = "".join(visit(child, item.tag) for child in item.children)
+            return value + ("\n" if item.tag in {"p", "div", "pre", "li", "tr"} else "")
+        return visit(node).strip("\r\n")
+
+    @staticmethod
+    def _cell_has_rich_content(cell: HtmlNode) -> bool:
+        return any(child.tag in {"a", "img", "object", "video", "audio", "iframe", "embed"}
+                   for child in cell.descendants())
+
+    def _code_table_cell(self, cell: HtmlNode) -> bool:
+        lines = [line for line in self._cell_literal(cell).splitlines() if line.strip()]
+        return len(lines) >= 3 and sum(obvious_shell_command(line) for line in lines) >= 2
+
+    def _render_table_cell_block(self, cell: HtmlNode, force_code: bool = False) -> str:
+        if list(cell.descendants("table")):
+            # Keep surrounding comments inside a fence too; they are not headings.
+            parts: list[str] = []
+            pending: list[HtmlNode | str] = []
+            def flush() -> None:
+                if pending:
+                    group = HtmlNode("td", children=list(pending))
+                    parts.append(self._render_table_cell_block(group, force_code or self._code_table_cell(cell)))
+                    pending.clear()
+            for child in cell.children:
+                if isinstance(child, HtmlNode) and (child.tag == "table" or list(child.descendants("table"))):
+                    flush()
+                    parts.append(self.render_table(child) if child.tag == "table"
+                                 else self._render_table_cell_block(child, force_code))
+                else:
+                    pending.append(child)
+            flush()
+            return "\n\n".join(parts) + "\n\n"
+        if self._cell_has_rich_content(cell):
+            return self.render_children(cell)
+        value = self._cell_literal(cell)
+        if not value.strip():
+            return ""
+        if force_code or self._code_table_cell(cell):
+            language = ""
+            if re.search(r"(?m)^\s*set\s+(?:-[A-Za-z]+\s+)?[A-Za-z_]\w*\s+\S", value):
+                language = "fish"
+            elif any(obvious_shell_command(line) for line in value.splitlines()):
+                language = shell_language(value.splitlines())
+            return fenced_code(value, language) + "\n\n"
+        return self.render_children(cell)
+
     def render_table(self, node: HtmlNode) -> str:
-        row_nodes = list(node.descendants("tr"))
-        if len(row_nodes) == 1:
-            cells = [child for child in row_nodes[0].child_nodes() if child.tag in {"th", "td"}]
-            if len(cells) == 1:
-                paragraphs = list(cells[0].descendants("p"))
-                plain_lines = [node_literal_text(paragraph) for paragraph in paragraphs if node_literal_text(paragraph)]
-                if plain_lines:
-                    value = "\n".join(plain_lines).replace("```", "``\u200b`")
-                    return f"```\n{value}\n```\n\n"
+        source_rows = self.table_rows(node)
+        if not source_rows:
+            return ""
+        if len(source_rows) == 1 and len(source_rows[0]) == 1:
+            return self._render_table_cell_block(source_rows[0][0], force_code=True)
+
+        nested = bool(list(node.descendants("table")))
+        code_table = any(self._code_table_cell(cell) for row in source_rows for cell in row)
+        if nested or code_table:
+            # Fences inside pipe-table cells do not render as copyable code blocks.
+            # Linearize complex tables, retaining cell coordinates and source order.
+            parts = []
+            for row_index, cells in enumerate(source_rows, 1):
+                for column_index, cell in enumerate(cells, 1):
+                    value = self._render_table_cell_block(cell)
+                    if value.strip():
+                        parts.append(f"**표 {row_index}행 · {column_index}열**\n\n{value}")
+            return "\n\n".join(parts) + "\n\n"
 
         rows: list[list[str]] = []
         self._table_depth += 1
         try:
-            for row in row_nodes:
-                cells = [child for child in row.child_nodes() if child.tag in {"th", "td"}]
-                if not cells:
-                    continue
+            for cells in source_rows:
                 rendered = []
                 for cell in cells:
                     value = normalize_markdown(self.render_children(cell)).replace("\n", "<br>")
