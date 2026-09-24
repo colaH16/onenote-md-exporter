@@ -1489,6 +1489,22 @@ class Converter:
             referenced.add(source_key)
 
         parts: list[str] = []
+        def append_item(value: str, item: dict[str, object]) -> None:
+            # Explicitly scoped history works for tables/single blocks as well
+            # as groups. Restore normal for a following current section; old
+            # pages still remain fallback in the downstream indexer.
+            if item.get("history"):
+                marker = str(item.get("historyMarker") or "이 아래 내용은 이전 시도 또는 실패 기록입니다.")
+                warning = f"> [!warning] 히스토리\n> {marker}"
+                first, separator, rest = value.partition("\n")
+                if re.match(r"^#{1,6}\s+", first):
+                    value = f"{first}\n\n{warning}\n\n{rest.lstrip()}"
+                else:
+                    value = f"{warning}\n\n{value}"
+                value = (f"<!-- rag-priority: fallback -->\n\n{value}\n\n"
+                         "<!-- rag-priority: normal -->")
+            parts.append(value)
+
         layout = curation.get("layout", [])
         if not isinstance(layout, list) or not layout:
             raise RuntimeError(f"curated page has no layout: {page_id}")
@@ -1497,14 +1513,14 @@ class Converter:
                 raise RuntimeError(f"curation layout item must be an object: {page_id}")
             item_type = str(item.get("type") or "block")
             if item_type == "markdown":
-                parts.append(str(item.get("text") or ""))
+                append_item(str(item.get("text") or ""), item)
                 continue
             if item_type == "block":
                 key = str(item.get("block") or "")
                 if key not in block_map:
                     raise RuntimeError(f"curation references missing block: {key}")
                 referenced.add(key)
-                parts.append(self._render_curated_block(block_map[key], item))
+                append_item(self._render_curated_block(block_map[key], item), item)
                 continue
             if item_type == "blocks":
                 keys = [str(value) for value in item.get("blocks", [])]
@@ -1513,11 +1529,8 @@ class Converter:
                     raise RuntimeError(f"curation references missing blocks: {', '.join(missing)}")
                 referenced.update(keys)
                 value = "\n\n".join(block_map[key].markdown for key in keys)
-                if item.get("history"):
-                    marker = str(item.get("historyMarker") or "이 아래 내용은 이전 시도 또는 실패 기록입니다.")
-                    value = f"<!-- rag-priority: fallback -->\n\n> [!warning] 히스토리\n> {marker}\n\n{value}"
                 heading = str(item.get("heading") or "").strip()
-                parts.append(f"{heading}\n\n{value}" if heading else value)
+                append_item(f"{heading}\n\n{value}" if heading else value, item)
                 continue
             if item_type == "table":
                 headers = [str(value) for value in item.get("headers", [])]
@@ -1546,7 +1559,7 @@ class Converter:
                 lines.extend(["</tbody>", "</table>"])
                 heading = str(item.get("heading") or "").strip()
                 table_value = "\n".join(lines)
-                parts.append(f"{heading}\n\n{table_value}" if heading else table_value)
+                append_item(f"{heading}\n\n{table_value}" if heading else table_value, item)
                 continue
             raise RuntimeError(f"unsupported curation layout item type: {item_type}")
 

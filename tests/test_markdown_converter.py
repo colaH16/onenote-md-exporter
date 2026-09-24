@@ -608,6 +608,29 @@ class CurationTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "unaccounted"):
                 Converter(project, config).convert()
 
+    def test_history_scopes_all_layout_types_and_preserves_following_current(self) -> None:
+        for historical in [
+            {"type":"block","block":"100,700"},
+            {"type":"blocks","blocks":["100,700"]},
+            {"type":"table","headers":["Prior attempt"],"rows":[[{"block":"100,700","mode":"literal"}]]},
+            {"type":"markdown","text":"Historical annotation"},
+        ]:
+            with self.subTest(type=historical['type']), tempfile.TemporaryDirectory() as temporary:
+                layout=[{**historical,"history":True,"heading":"## Earlier attempt"},
+                        {"type":"block","block":"100,50","heading":"## Current"}]
+                if historical['type']=='markdown':
+                    layout.append({"type":"block","block":"100,700"})
+                project,config=self.make_project(temporary,{"resolved":True,"layout":layout})
+                Converter(project,config).convert()
+                markdown=(project/'output/markdown/Notebook/Section/Page.md').read_text()
+                self.assertEqual(markdown.count('<!-- rag-priority: fallback -->'),1)
+                self.assertEqual(markdown.count('<!-- rag-priority: normal -->'),1)
+                start=markdown.index('<!-- rag-priority: fallback -->')
+                end=markdown.index('<!-- rag-priority: normal -->')
+                self.assertLess(start,end)
+                self.assertLess(end,markdown.index('## Current'))
+                self.assertIn('[!warning] 히스토리',markdown[start:end])
+
 
 if __name__ == "__main__":
     unittest.main()
