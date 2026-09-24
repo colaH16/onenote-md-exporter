@@ -262,6 +262,10 @@ def safe_name(value: str, fallback: str = "untitled", maximum: int = 120) -> str
     value = re.sub(r"\s+", " ", value).strip().rstrip(".")
     if value in {"", ".", ".."}:
         value = fallback
+    # Dot-prefixed paths are hidden and intentionally blocked by the reader/backup.
+    # Keep the original title in metadata, but use a visible filesystem component.
+    if value.startswith("."):
+        value = "note-" + (value.lstrip(".- ") or fallback)
     if len(value) > maximum:
         value = value[:maximum].rstrip(" .")
     return value or fallback

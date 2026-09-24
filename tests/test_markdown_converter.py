@@ -25,6 +25,12 @@ from onenote_to_markdown import (  # noqa: E402
 
 
 class MarkdownRendererTests(unittest.TestCase):
+    def test_command_and_dot_titles_never_make_hidden_paths(self) -> None:
+        self.assertEqual('note-status', current_page_name('./status'))
+        self.assertEqual('note-config', current_name('.config'))
+        self.assertEqual('note-status', current_page_name('../status'))
+        self.assertEqual('untitled', current_name('..'))
+
     def test_long_ocr_image_alt_falls_back_to_file_name(self) -> None:
         long_alt = "OCR text " * 40
         source = f'<html><body><div><img src="assets/example image.png" alt="{long_alt}" /></div></body></html>'
